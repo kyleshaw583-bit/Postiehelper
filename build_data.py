@@ -4,6 +4,9 @@ Postie Helper data build - run by GitHub Actions every night.
 Makes site/data/points.json containing every UK:
   - toilet from the Toilet Map open dataset (CC BY 4.0)
   - toilet, post box, Post Office and Royal Mail parcel locker from OpenStreetMap (ODbL)
+  - place that OpenStreetMap says has toilets: petrol stations, supermarkets, shops,
+    shopping centres, motorway services, libraries, stations, public buildings,
+    cafes, pubs, fast food and restaurants
 then copies the app files into site/ ready to publish on GitHub Pages.
 """
 import csv, io, json, math, os, re, shutil, subprocess, sys, glob, urllib.request
@@ -25,6 +28,49 @@ def fetch(url, dest=None):
                 shutil.copyfileobj(r, f, 1 << 20)
             return dest
         return r.read()
+
+# ---------------- what kind of place is this toilet at? ----------------
+# Toilet Map entries only have a name, so guess from it (first match wins)
+NAME_CATS = [
+    ("fuel", r"\b(shell|bp|esso|texaco|jet|gulf|murco|valero|filling station|petrol station|service station)\b"),
+    ("services", r"\b(services|service area|moto|welcome break|roadchef|extra msa)\b"),
+    ("supermarket", r"\b(tesco|sainsbury'?s?|asda|morrisons|aldi|lidl|waitrose|co-?op|iceland|booths|m ?& ?s|marks (and|&) spencer)\b"),
+    ("mall", r"\b(shopping cent(re|er)|mall|retail park)\b"),
+    ("shop", r"\b(b ?& ?q|homebase|wickes|ikea|dunelm|garden cent(re|er)|boots|primark|john lewis|debenhams|next|the range|b ?& ?m|matalan)\b"),
+    ("library", r"\blibrary\b"),
+    ("station", r"\b(station|bus station|coach station|interchange)\b"),
+    ("fast_food", r"\b(mcdonald'?s|kfc|burger king|subway|five guys|taco bell|popeyes)\b"),
+    ("cafe", r"\b(costa|starbucks|caff[eè] nero|greggs|pret|cafe|café|coffee|tea ?room)\b"),
+    ("pub", r"\b(pub|inn|arms|tavern|wetherspoon|brewery|bar)\b"),
+    ("public", r"\b(town hall|community (cent(re|er)|hall)|village hall|leisure cent(re|er)|museum|visitor cent(re|er)|civic|council|church|hospital|sports cent(re|er))\b"),
+]
+NAME_CATS = [(c, re.compile(p, re.I)) for c, p in NAME_CATS]
+
+def cat_from_name(name):
+    for c, rx in NAME_CATS:
+        if rx.search(name or ""):
+            return c
+    return None
+
+def cat_from_tags(p):
+    a, s = p.get("amenity", ""), p.get("shop", "")
+    if a == "fuel": return "fuel"
+    if p.get("highway") in ("services", "rest_area"): return "services"
+    if s == "supermarket": return "supermarket"
+    if s in ("mall", "department_store") or a == "marketplace": return "mall"
+    if s: return "shop"
+    if a == "library": return "library"
+    if p.get("railway") in ("station", "halt") or p.get("public_transport") == "station" or a == "bus_station": return "station"
+    if a == "cafe": return "cafe"
+    if a in ("pub", "bar", "biergarten"): return "pub"
+    if a == "fast_food": return "fast_food"
+    if a in ("restaurant", "food_court", "ice_cream"): return "restaurant"
+    if (a in ("townhall", "community_centre", "social_centre", "arts_centre", "place_of_worship", "hospital",
+              "clinic", "courthouse", "theatre", "cinema")
+            or p.get("leisure") in ("sports_centre", "leisure_centre", "park", "water_park")
+            or p.get("tourism") in ("museum", "attraction", "gallery", "zoo", "theme_park", "information")):
+        return "public"
+    return "place"
 
 # ---------------- Toilet Map ----------------
 TM_KEEP = ["id", "name", "accessible", "baby_change", "radar", "no_payment",
@@ -60,6 +106,9 @@ def toilet_map():
         t = {k: r[k].strip() for k in TM_KEEP if r.get(k, "").strip()}
         if "notes" in t and len(t["notes"]) > 280:
             t["notes"] = t["notes"][:277] + "..."
+        c = cat_from_name(t.get("name"))
+        if c:
+            t["cat"] = c
         item = {"k": "t", "s": "tm", "a": round(lat, 5), "o": round(lon, 5), "t": t}
         if r.get("opening_times"):
             try:
@@ -70,11 +119,10 @@ def toilet_map():
     return out
 
 # ---------------- OpenStreetMap ----------------
-OSM_KEEP = ["name", "ref", "collection_times", "check_date:collection_times", "post_box:type",
+OSM_KEEP = ["name", "brand", "ref", "collection_times", "check_date:collection_times", "post_box:type",
             "royal_cypher", "postal_code", "addr:postcode", "addr:street", "addr:housenumber",
-            "opening_hours", "operator", "brand", "fee", "charge", "wheelchair",
-            "changing_table", "access", "toilets", "toilets:wheelchair", "toilets:access"]
-FUEL_NAME = re.compile(r"\b(shell|bp|esso|texaco|jet|gulf|murco|valero|filling station|petrol station|service station)\b", re.I)
+            "opening_hours", "operator", "fee", "charge", "wheelchair", "changing_table", "access",
+            "toilets", "toilets:wheelchair", "toilets:access", "toilets:fee", "toilets:changing_table", "v"]
 
 def centroid(geom):
     pts = []
@@ -91,6 +139,7 @@ def osm():
     pbf = fetch("https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf", "/tmp/uk.osm.pbf")
     subprocess.run(["osmium", "tags-filter", pbf, "n/amenity=post_box",
                     "nwr/amenity=post_office,parcel_locker,toilets,fuel,vending_machine",
+                    "nwr/toilets=yes,customers", "nwr/highway=services",
                     "-o", "/tmp/f.osm.pbf", "--overwrite"], check=True)
     subprocess.run(["osmium", "export", "/tmp/f.osm.pbf", "-f", "geojsonseq",
                     "-o", "/tmp/f.geojsonseq", "--overwrite", "--add-unique-id=type_id",
@@ -114,8 +163,9 @@ def osm():
                 continue
             if not inside(lat, lon):
                 continue
+            has_toilets = p.get("toilets") in ("yes", "customers")
             rm = re.search(r"royal\s*mail", " ".join(p.get(x, "") for x in ("brand", "operator", "name")), re.I)
-            fuel = False
+            cat = None
             if am == "post_box":
                 k = "p"
             elif am == "post_office":
@@ -130,14 +180,18 @@ def osm():
                 k = "t"
             elif am == "fuel":
                 fuels.append((lat, lon))
-                if p.get("toilets") not in ("yes", "customers"):
+                if not has_toilets:
                     continue
-                k, fuel = "t", True
+                k, cat = "t", "fuel"
+                p = dict(p, v="1")
+            elif has_toilets or p.get("highway") == "services":
+                k, cat = "t", cat_from_tags(p)
+                p = dict(p, v="1")          # a venue rather than a toilet block
             else:
                 continue
             t = {x: p[x] for x in OSM_KEEP if p.get(x)}
-            if fuel:
-                t["fuel"] = "1"
+            if cat:
+                t["cat"] = cat
             out.append({"k": k, "s": "osm", "id": fid, "a": round(lat, 5), "o": round(lon, 5), "t": t})
     return out, fuels
 
@@ -147,41 +201,68 @@ def metres(a, b):
     dx = (a["o"] - b["o"]) * 111320 * math.cos(math.radians(a["a"]))
     return math.hypot(dx, dy)
 
+def cell(lat, lon):
+    return round(lat * 300), round(lon * 200)      # roughly 370 m x 350 m
+
+def nearby(index, lat, lon):
+    gy, gx = cell(lat, lon)
+    return [y for dy in (-1, 0, 1) for dx in (-1, 0, 1) for y in index.get((gy + dy, gx + dx), [])]
+
 def main():
     tm = toilet_map()
     om, fuels = osm()
 
-    def cell(lat, lon):
-        return round(lat * 300), round(lon * 200)
-    def nearby(index, lat, lon):
-        gy, gx = cell(lat, lon)
-        return [y for dy in (-1, 0, 1) for dx in (-1, 0, 1) for y in index.get((gy + dy, gx + dx), [])]
-
-    # Toilet Map toilets at a petrol station (by name, or within 40 m of one)
+    # Toilet Map toilets within 40 m of a petrol station are at that station
     fuel_index = {}
     for lat, lon in fuels:
         fuel_index.setdefault(cell(lat, lon), []).append({"a": lat, "o": lon})
     for x in tm:
-        if FUEL_NAME.search(x["t"].get("name", "")) or any(metres(x, y) < 40 for y in nearby(fuel_index, x["a"], x["o"])):
-            x["t"]["fuel"] = "1"
+        if "cat" not in x["t"] and any(metres(x, y) < 40 for y in nearby(fuel_index, x["a"], x["o"])):
+            x["t"]["cat"] = "fuel"
 
-    # drop OSM toilets the Toilet Map already has (30 m, or 60 m for petrol stations)
-    tm_index = {}
+    # plain toilets first: Toilet Map, then OSM toilets it doesn't already have (30 m)
+    index = {}
+    def remember(x):
+        index.setdefault(cell(x["a"], x["o"]), []).append(x)
     for x in tm:
-        tm_index.setdefault(cell(x["a"], x["o"]), []).append(x)
-    kept = []
+        remember(x)
+    toilets = list(tm)
+    others = []
     for x in om:
-        if x["k"] == "t":
-            limit = 60 if x["t"].get("fuel") else 30
-            if any(metres(x, y) < limit for y in nearby(tm_index, x["a"], x["o"])):
-                continue
-        kept.append(x)
-    points = tm + kept
+        if x["k"] != "t":
+            others.append(x)
+        elif "cat" not in x["t"]:
+            if not any(metres(x, y) < 30 for y in nearby(index, x["a"], x["o"])):
+                toilets.append(x)
+                remember(x)
+    # then places with toilets; if one already sits within 40 m (60 m for petrol and services),
+    # keep the existing toilet and give it the place's type and toilet details instead
+    for x in om:
+        if x["k"] != "t" or "cat" not in x["t"]:
+            continue
+        limit = 60 if x["t"]["cat"] in ("fuel", "services") else 40
+        near = [y for y in nearby(index, x["a"], x["o"]) if metres(x, y) < limit]
+        if near:
+            y = min(near, key=lambda y: metres(x, y))
+            y["t"].setdefault("cat", x["t"]["cat"])
+            place = x["t"].get("name") or x["t"].get("brand")
+            if place and place != y["t"].get("name"):
+                y["t"].setdefault("at", place)
+            for key in ("toilets", "toilets:access"):
+                if key in x["t"]:
+                    y["t"].setdefault(key, x["t"][key])
+            continue
+        toilets.append(x)
+        remember(x)
+
+    points = toilets + others
     counts = {}
     for x in points:
         counts[x["k"]] = counts.get(x["k"], 0) + 1
-    counts["fuel_toilets"] = sum(1 for x in points if x["t"].get("fuel"))
-    print("Counts:", counts)
+        c = x["t"].get("cat")
+        if c:
+            counts["at_" + c] = counts.get("at_" + c, 0) + 1
+    print("Counts:", json.dumps(counts, sort_keys=True))
     if counts.get("p", 0) < 10000:
         sys.exit("Too few post boxes - something went wrong, keeping the previous site")
 

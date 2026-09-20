@@ -103,7 +103,8 @@
   .pop dt { color: #5B6470; } .pop dd { margin: 0; }
   .pop .go { display: block; margin-top: 10px; text-align: center; padding: 10px; border-radius: 10px; background: #1C1F24; color: #fff !important; text-decoration: none; font-weight: 700; }
   .badge { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-bottom: 6px; }
-  .badge.open { background: #DDF3E4; color: #14532D; } .badge.shut { background: #FDE2E2; color: #7F1D1D; }
+  .badge.open { background: #DDF3E4; color: #14532D; }
+  .badge.cat { background: #E8EEF7; color: #1F4E8C; } .badge.cust { background: #FFF1D6; color: #7A4B00; } .badge.shut { background: #FDE2E2; color: #7F1D1D; }
   .pop .notes { margin-top: 8px; font-size: 14px; color: #5B6470; max-height: 6.5em; overflow: auto; white-space: pre-line; }
   .pop .src { margin-top: 8px; font-size: 12.5px; } .pop .src a { color: #1F4E8C; }
   .you { width: 18px; height: 18px; border-radius: 50%; background: #1A73E8; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(26,115,232,.25); }
@@ -155,9 +156,57 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
   const ICONS = { toilet: "🚻", postbox: "📮", office: "🏤", locker: "📦" };
   const NAMES = { toilet: "Toilet", postbox: "Post box", office: "Post Office", locker: "Parcel locker" };
   const DAYC = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
-  const FUEL_NAME = /\b(shell|bp|esso|texaco|jet|gulf|murco|valero|filling station|petrol station|service station)\b/i;
-  const isFuel = f => f.kind === "toilet" && (f.tags.fuel === "1" || f.tags.amenity === "fuel" || (f.src === "tm" && FUEL_NAME.test(f.tags.name || "")));
-  const iconOf = f => isFuel(f) ? "⛽" : ICONS[f.kind];
+  // the type of place a toilet is at: icon and label
+  const CATS = {
+    fuel: ["⛽", "Petrol station"], services: ["🛣️", "Motorway services"], supermarket: ["🛒", "Supermarket"],
+    mall: ["🏬", "Shopping centre"], shop: ["🛍️", "Shop"], library: ["📚", "Library"], station: ["🚉", "Station"],
+    public: ["🏛️", "Public building"], cafe: ["☕", "Café"], pub: ["🍺", "Pub"], fast_food: ["🍔", "Fast food"],
+    restaurant: ["🍽️", "Restaurant"], place: ["🚻", "Venue"]
+  };
+  const CUSTOMER_CATS = ["cafe", "pub", "fast_food", "restaurant"];
+  // used when running on live data (the nightly build normally does this)
+  const NAME_CATS = [
+    ["fuel", /\b(shell|bp|esso|texaco|jet|gulf|murco|valero|filling station|petrol station|service station)\b/i],
+    ["services", /\b(services|service area|moto|welcome break|roadchef)\b/i],
+    ["supermarket", /\b(tesco|sainsbury'?s?|asda|morrisons|aldi|lidl|waitrose|co-?op|iceland|m ?& ?s)\b/i],
+    ["mall", /\b(shopping cent(re|er)|mall|retail park)\b/i],
+    ["library", /\blibrary\b/i], ["station", /\bstation\b/i],
+    ["fast_food", /\b(mcdonald'?s|kfc|burger king|subway)\b/i],
+    ["cafe", /\b(costa|starbucks|caff[eè] nero|greggs|pret|cafe|café|coffee)\b/i],
+    ["pub", /\b(pub|inn|arms|tavern|wetherspoon)\b/i]
+  ];
+  function catFromTags(t) {
+    const a = t.amenity || "", s = t.shop || "";
+    if (a === "fuel") return "fuel";
+    if (t.highway === "services") return "services";
+    if (s === "supermarket") return "supermarket";
+    if (s === "mall" || s === "department_store") return "mall";
+    if (s) return "shop";
+    if (a === "library") return "library";
+    if (t.railway === "station" || t.public_transport === "station" || a === "bus_station") return "station";
+    if (a === "cafe") return "cafe";
+    if (a === "pub" || a === "bar") return "pub";
+    if (a === "fast_food") return "fast_food";
+    if (a === "restaurant") return "restaurant";
+    if (["townhall", "community_centre", "hospital", "place_of_worship"].includes(a) || t.leisure === "sports_centre" || t.tourism === "museum") return "public";
+    return "place";
+  }
+  function catOf(f) {
+    if (f.kind !== "toilet") return null;
+    if (f.cat !== undefined) return f.cat;
+    let c = f.tags.cat || (f.tags.fuel === "1" ? "fuel" : null);
+    if (!c && f.src === "osm" && f.tags.amenity && f.tags.amenity !== "toilets") c = catFromTags(f.tags);
+    if (!c && f.src === "osm" && (f.tags.shop || f.tags.highway === "services" || f.tags.railway)) c = catFromTags(f.tags);
+    if (!c && f.src === "tm") { const m = NAME_CATS.find(([, rx]) => rx.test(f.tags.name || "")); c = m ? m[0] : null; }
+    return (f.cat = c || null);
+  }
+  const isFuel = f => catOf(f) === "fuel";
+  const iconOf = f => { const c = catOf(f); return c ? CATS[c][0] : ICONS[f.kind]; };
+  const customersOnly = f => {
+    const t = f.tags, acc = t["toilets:access"];
+    if (acc === "yes" || acc === "public") return false;
+    return t.toilets === "customers" || acc === "customers" || CUSTOMER_CATS.includes(catOf(f));
+  };
 
   // ---------- map ----------
   const map = L.map("map", { zoomControl: false }).setView([52.087, -0.264], 15); // Biggleswade
@@ -269,8 +318,9 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 
   // ---------- popups ----------
   const titleOf = f => {
-    if (f.src === "tm") return f.tags.name || (isFuel(f) ? "Petrol station toilet" : "Toilet");
-    if (isFuel(f)) return f.tags.name || f.tags.brand || "Petrol station";
+    const c = catOf(f);
+    if (f.src === "tm") return f.tags.name || f.tags.at || (c ? CATS[c][1] + " toilet" : "Toilet");
+    if (c) return f.tags.name || f.tags.brand || f.tags.at || CATS[c][1];
     if (f.kind === "postbox") return f.tags.ref ? `Post box ${f.tags.ref}` : "Post box";
     return f.tags.name || NAMES[f.kind];
   };
@@ -290,10 +340,11 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       add("For", [t.women === "true" && "women", t.men === "true" && "men", t.all_gender === "true" && "all genders"].filter(Boolean).join(", ") || null);
       if (t.notes && t.notes.length > 1) extra += `<div class="notes">${esc(t.notes)}</div>`;
       extra += `<div class="src"><a href="https://www.toiletmap.org.uk/loos/${encodeURIComponent(t.id)}" target="_blank" rel="noopener">View or update on Toilet Map</a></div>`;
-    } else if (isFuel(f)) {
-      add("Toilets", t.toilets === "customers" ? "Customers only" : "Yes");
-      add("Open", t.opening_hours ? esc(t.opening_hours) : null);
+    } else if (t.v === "1" || (t.amenity && t.amenity !== "toilets")) {
+      add("Open", t.opening_hours ? esc(t.opening_hours).replace(/;\s*/g, "<br>") : null);
       add("Accessible", yn(t["toilets:wheelchair"]));
+      add("Baby change", yn(t["toilets:changing_table"]));
+      add("Charge", t["toilets:fee"] === "yes" ? "Yes" : t["toilets:fee"] === "no" ? "Free" : null);
     } else if (f.kind === "toilet") {
       add("Charge", t.fee === "yes" ? (t.charge ? esc(t.charge) : "Yes") : t.fee === "no" ? "Free" : null);
       add("Open", t.opening_hours ? esc(t.opening_hours) : null);
@@ -314,7 +365,10 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     if (you) add("Distance", fmtDist(distM(you, f)));
     if (!rows.length) rows.push(`<dt>Details</dt><dd>None recorded yet</dd>`);
     const dir = `https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}&travelmode=walking`;
-    return `<div class="pop"><h3>${iconOf(f)} ${esc(titleOf(f))}</h3>${isFuel(f) && f.src === "tm" ? `<div class="badge" style="background:#E8EEF7;color:#1F4E8C">Petrol station</div> ` : ""}${badge}<dl>${rows.join("")}</dl>${extra}<a class="go" href="${dir}" target="_blank" rel="noopener">Walking directions</a></div>`;
+    const c = catOf(f);
+    const place = c ? `<span class="badge cat">${CATS[c][1]}${t.at && t.at !== titleOf(f) ? ": " + esc(t.at) : ""}</span> ` : "";
+    const cust = f.kind === "toilet" && customersOnly(f) ? `<span class="badge cust">Customers only, just ask</span> ` : "";
+    return `<div class="pop"><h3>${iconOf(f)} ${esc(titleOf(f))}</h3>${place}${cust}${badge}<dl>${rows.join("")}</dl>${extra}<a class="go" href="${dir}" target="_blank" rel="noopener">Walking directions</a></div>`;
   }
   function markerFor(f) {
     if (!f.marker) f.marker = L.marker([f.lat, f.lon], {
@@ -430,7 +484,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     else if (t.amenity === "post_office") kind = "office";
     else if (t.amenity === "parcel_locker" && /royal\s*mail/i.test(`${t.brand || ""} ${t.operator || ""} ${t.name || ""}`)) kind = "locker";
     else if (t.amenity === "toilets" && !toiletsFromFile && t.access !== "private" && t.access !== "no") kind = "toilet";
-    else if (t.amenity === "fuel" && (t.toilets === "yes" || t.toilets === "customers")) kind = "toilet";
+    else if (t.toilets === "yes" || t.toilets === "customers" || t.highway === "services") kind = "toilet";
     if (kind && lat != null) addItem({ id: el.type[0] + el.id, kind, src: "osm", lat, lon, tags: t });
   }
   const loadedBoxes = [];
@@ -443,7 +497,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     busy = true;
     const b = view.pad(0.15), bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
     try {
-      const q = `[out:json][timeout:30];(${toiletsFromFile ? "" : `nwr["amenity"="toilets"](${bbox});`}node["amenity"="post_box"](${bbox});nwr["amenity"="post_office"](${bbox});nwr["amenity"="parcel_locker"](${bbox});nwr["amenity"="fuel"]["toilets"~"^(yes|customers)$"](${bbox}););out center tags;`;
+      const q = `[out:json][timeout:30];(${toiletsFromFile ? "" : `nwr["amenity"="toilets"](${bbox});`}node["amenity"="post_box"](${bbox});nwr["amenity"="post_office"](${bbox});nwr["amenity"="parcel_locker"](${bbox});nwr["toilets"~"^(yes|customers)$"](${bbox});nwr["highway"="services"](${bbox}););out center tags;`;
       const data = await overpass(q, n => setStatus(n === 1 ? "Loading this area…" : `Loading this area… (server ${n})`, "loading"));
       data.elements.forEach(addOsm);
       loadedBoxes.push(b);
@@ -493,6 +547,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       let best = null;
       for (const f of items) {
         if (f.kind !== "toilet" || (f.src === "tm" && openState(f.times) === false)) continue;
+        if (Math.abs(f.lat - o.lat) > 0.3 || Math.abs(f.lon - o.lon) > 0.5) continue;
         const d = distM(o, f);
         if (!best || d < best.d) best = { f, d };
       }
@@ -518,6 +573,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 
   function showIdle() {
     showList(`<button class="res feature" data-act="late"><span class="i">⏰</span><span><b>Latest collections near me</b><small>Post boxes nearby, latest collection first</small></span></button>
+      <button class="res feature" data-act="toilets"><span class="i">🚻</span><span><b>Toilets near me</b><small>Every type, nearest first</small></span></button>
       <button class="res feature" data-act="fuel"><span class="i">⛽</span><span><b>Petrol stations with toilets near me</b><small>Nearest first, open ones marked</small></span></button>
       <div class="empty">Search by post box number (like SG18 12), postcode, town or Post Office name.</div>`, []);
   }
@@ -534,16 +590,26 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       list.map((x, i) => itemButton(x.f, `<span class="late">Last ${x.last}</span>, ${fmtDist(x.d)}`, i)).join(""), list.map(x => x.f));
   }
 
-  function fuelNearMe() {
+  function toiletList(title, filter, radius, emptyMsg) {
     const o = origin();
-    const list = itemsIn(L.latLng(o.lat, o.lon).toBounds(30000)).filter(isFuel)
+    const list = itemsIn(L.latLng(o.lat, o.lon).toBounds(radius * 2)).filter(f => f.kind === "toilet" && filter(f))
       .map(f => ({ f, d: distM(o, f), st: f.src === "tm" ? openState(f.times) : null }))
-      .filter(x => x.d <= 15000).sort((a, b) => a.d - b.d).slice(0, 15);
-    if (!list.length) return showList(`<h4>Petrol stations with toilets</h4><div class="empty">None recorded within 15 km. If you know one, add it on toiletmap.org.uk and it'll appear here the next day.</div>`, []);
-    showList(`<h4>Petrol stations with toilets, nearest first</h4>` + list.map((x, i) => itemButton(x.f,
-      (x.st === true ? `<span style="color:#14532D;font-weight:700">Open now</span>, ` : x.st === false ? `<span class="late">Closed now</span>, ` : "") + fmtDist(x.d) +
-      (x.f.tags.toilets === "customers" ? ", customers only" : ""), i)).join(""), list.map(x => x.f));
+      .filter(x => x.d <= radius).sort((a, b) => a.d - b.d).slice(0, 20);
+    if (!list.length) return showList(`<h4>${title}</h4><div class="empty">${emptyMsg}</div>`, []);
+    showList(`<h4>${title}</h4>` + list.map((x, i) => {
+      const c = catOf(x.f);
+      const bits = [
+        c ? CATS[c][1] : "Public toilet",
+        x.st === true ? `<span style="color:#14532D;font-weight:700">Open now</span>` : x.st === false ? `<span class="late">Closed now</span>` : "",
+        fmtDist(x.d),
+        customersOnly(x.f) ? "customers, just ask" : ""
+      ].filter(Boolean).join(", ");
+      return itemButton(x.f, bits, i);
+    }).join(""), list.map(x => x.f));
   }
+  const toiletsNearMe = () => toiletList("Toilets near me, nearest first", () => true, 5000, "No toilets recorded within 5 km.");
+  const fuelNearMe = () => toiletList("Petrol stations with toilets, nearest first", isFuel, 15000,
+    "None recorded within 15 km. If you know one, add it on toiletmap.org.uk and it'll appear here the next day.");
 
   async function runSearch(text) {
     const seq = ++searchSeq, raw = text.trim(), n = norm(raw), low = raw.toLowerCase();
@@ -600,6 +666,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     const b = e.target.closest(".res"); if (!b) return;
     if (b.dataset.act === "late") return latestNearMe();
     if (b.dataset.act === "fuel") return fuelNearMe();
+    if (b.dataset.act === "toilets") return toiletsNearMe();
     if (b.dataset.lat) { closeResults(); map.setView([+b.dataset.lat, +b.dataset.lon], 16); return; }
     const f = lastList[+b.dataset.i]; if (f) focusItem(f);
   });
