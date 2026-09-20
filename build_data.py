@@ -46,6 +46,13 @@ NAME_CATS = [
 ]
 NAME_CATS = [(c, re.compile(p, re.I)) for c, p in NAME_CATS]
 
+# Sit-in chains that almost always have customer toilets. Included even when nobody has
+# recorded it, and flagged as unconfirmed. Takeaway-only brands (Domino's, Papa John's,
+# Greggs, most Subways) are left out because they usually have none.
+ASSUME_CHAINS = re.compile(r"\b(mcdonald'?s|kfc|burger king|nando'?s|five guys|taco bell|popeyes|wendy'?s|"
+                           r"pizza hut|wagamama|t ?g ?i ?friday'?s|frankie (and|&) benny'?s|harvester|"
+                           r"toby carvery|beefeater|brewers fayre|hungry horse|miller (and|&) carter)\b", re.I)
+
 def cat_from_name(name):
     for c, rx in NAME_CATS:
         if rx.search(name or ""):
@@ -122,7 +129,7 @@ def toilet_map():
 OSM_KEEP = ["name", "brand", "ref", "collection_times", "check_date:collection_times", "post_box:type",
             "royal_cypher", "postal_code", "addr:postcode", "addr:street", "addr:housenumber",
             "opening_hours", "operator", "fee", "charge", "wheelchair", "changing_table", "access",
-            "toilets", "toilets:wheelchair", "toilets:access", "toilets:fee", "toilets:changing_table", "v"]
+            "toilets", "toilets:wheelchair", "toilets:access", "toilets:fee", "toilets:changing_table", "changing_table", "v", "assumed"]
 
 def centroid(geom):
     pts = []
@@ -140,6 +147,7 @@ def osm():
     subprocess.run(["osmium", "tags-filter", pbf, "n/amenity=post_box",
                     "nwr/amenity=post_office,parcel_locker,toilets,fuel,vending_machine",
                     "nwr/toilets=yes,customers", "nwr/highway=services",
+                    "nwr/amenity=fast_food,restaurant",
                     "-o", "/tmp/f.osm.pbf", "--overwrite"], check=True)
     subprocess.run(["osmium", "export", "/tmp/f.osm.pbf", "-f", "geojsonseq",
                     "-o", "/tmp/f.geojsonseq", "--overwrite", "--add-unique-id=type_id",
@@ -187,9 +195,19 @@ def osm():
             elif has_toilets or p.get("highway") == "services":
                 k, cat = "t", cat_from_tags(p)
                 p = dict(p, v="1")          # a venue rather than a toilet block
+                if not has_toilets:
+                    p["assumed"] = "1"      # motorway services: toilets taken as read
+            elif am in ("fast_food", "restaurant") and ASSUME_CHAINS.search(
+                    " ".join(p.get(x, "") for x in ("brand", "name", "operator"))):
+                if p.get("toilets") == "no":
+                    continue
+                k, cat = "t", cat_from_tags(p)
+                p = dict(p, v="1", assumed="1")
             else:
                 continue
             t = {x: p[x] for x in OSM_KEEP if p.get(x)}
+            if p.get("changing_place") == "yes" or p.get("changing_table:adult") == "yes":
+                t["cp"] = "1"          # Changing Places: adult-sized bench and hoist
             if cat:
                 t["cat"] = cat
             out.append({"k": k, "s": "osm", "id": fid, "a": round(lat, 5), "o": round(lon, 5), "t": t})
@@ -248,6 +266,8 @@ def main():
             place = x["t"].get("name") or x["t"].get("brand")
             if place and place != y["t"].get("name"):
                 y["t"].setdefault("at", place)
+            if x["t"].get("cp"):
+                y["t"]["cp"] = "1"
             for key in ("toilets", "toilets:access"):
                 if key in x["t"]:
                     y["t"].setdefault(key, x["t"][key])
@@ -262,6 +282,10 @@ def main():
         c = x["t"].get("cat")
         if c:
             counts["at_" + c] = counts.get("at_" + c, 0) + 1
+        if x["t"].get("cp"):
+            counts["changing_places"] = counts.get("changing_places", 0) + 1
+        if x["t"].get("assumed"):
+            counts["unconfirmed"] = counts.get("unconfirmed", 0) + 1
     print("Counts:", json.dumps(counts, sort_keys=True))
     if counts.get("p", 0) < 10000:
         sys.exit("Too few post boxes - something went wrong, keeping the previous site")

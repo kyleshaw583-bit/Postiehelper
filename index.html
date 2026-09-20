@@ -92,6 +92,7 @@
   .pin.toilet { background: var(--teal); } .pin.postbox { background: var(--red); }
   .pin.office { background: var(--blue); } .pin.locker { background: var(--plum); }
   .pin.hl { outline: 4px solid #FFD200; }
+  .pin.guess { opacity: .62; border-style: dashed; }
   .cl { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   .cl.toilet { background: var(--teal); } .cl.postbox { background: var(--red); }
   .cl.office { background: var(--blue); } .cl.locker { background: var(--plum); }
@@ -104,7 +105,7 @@
   .pop .go { display: block; margin-top: 10px; text-align: center; padding: 10px; border-radius: 10px; background: #1C1F24; color: #fff !important; text-decoration: none; font-weight: 700; }
   .badge { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-bottom: 6px; }
   .badge.open { background: #DDF3E4; color: #14532D; }
-  .badge.cat { background: #E8EEF7; color: #1F4E8C; } .badge.cust { background: #FFF1D6; color: #7A4B00; } .badge.shut { background: #FDE2E2; color: #7F1D1D; }
+  .badge.cat { background: #E8EEF7; color: #1F4E8C; } .badge.cp { background: #EDE4F7; color: #4B2A73; } .badge.guess { background: #EEF0F3; color: #45505E; } .badge.cust { background: #FFF1D6; color: #7A4B00; } .badge.shut { background: #FDE2E2; color: #7F1D1D; }
   .pop .notes { margin-top: 8px; font-size: 14px; color: #5B6470; max-height: 6.5em; overflow: auto; white-space: pre-line; }
   .pop .src { margin-top: 8px; font-size: 12.5px; } .pop .src a { color: #1F4E8C; }
   .you { width: 18px; height: 18px; border-radius: 50%; background: #1A73E8; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(26,115,232,.25); }
@@ -201,7 +202,9 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     return (f.cat = c || null);
   }
   const isFuel = f => catOf(f) === "fuel";
-  const iconOf = f => { const c = catOf(f); return c ? CATS[c][0] : ICONS[f.kind]; };
+  const iconOf = f => { const c = catOf(f); return c ? CATS[c][0] : (f.kind === "toilet" && f.tags.cp === "1" ? "♿" : ICONS[f.kind]); };
+  const assumed = f => f.tags.assumed === "1";
+  const isCP = f => f.tags.cp === "1" || f.tags.changing_place === "yes" || f.tags["changing_table:adult"] === "yes";
   const customersOnly = f => {
     const t = f.tags, acc = t["toilets:access"];
     if (acc === "yes" || acc === "public") return false;
@@ -368,11 +371,13 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     const c = catOf(f);
     const place = c ? `<span class="badge cat">${CATS[c][1]}${t.at && t.at !== titleOf(f) ? ": " + esc(t.at) : ""}</span> ` : "";
     const cust = f.kind === "toilet" && customersOnly(f) ? `<span class="badge cust">Customers only, just ask</span> ` : "";
-    return `<div class="pop"><h3>${iconOf(f)} ${esc(titleOf(f))}</h3>${place}${cust}${badge}<dl>${rows.join("")}</dl>${extra}<a class="go" href="${dir}" target="_blank" rel="noopener">Walking directions</a></div>`;
+    const guess = assumed(f) ? `<span class="badge guess">Toilets not confirmed</span> ` : "";
+    const cp = f.kind === "toilet" && isCP(f) ? `<span class="badge cp">Changing Places</span> ` : "";
+    return `<div class="pop"><h3>${iconOf(f)} ${esc(titleOf(f))}</h3>${place}${cp}${cust}${guess}${badge}<dl>${rows.join("")}</dl>${extra}<a class="go" href="${dir}" target="_blank" rel="noopener">Walking directions</a></div>`;
   }
   function markerFor(f) {
     if (!f.marker) f.marker = L.marker([f.lat, f.lon], {
-      icon: L.divIcon({ html: `<div class="pin ${f.kind}"><span>${iconOf(f)}</span></div>`, className: "", iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }),
+      icon: L.divIcon({ html: `<div class="pin ${f.kind}${assumed(f) ? " guess" : ""}"><span>${iconOf(f)}</span></div>`, className: "", iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }),
       title: titleOf(f)
     }).bindPopup(() => popupHtml(f), { maxWidth: 290 });
     return f.marker;
@@ -549,7 +554,8 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
         if (f.kind !== "toilet" || (f.src === "tm" && openState(f.times) === false)) continue;
         if (Math.abs(f.lat - o.lat) > 0.3 || Math.abs(f.lon - o.lon) > 0.5) continue;
         const d = distM(o, f);
-        if (!best || d < best.d) best = { f, d };
+        const score = d + (assumed(f) ? 200 : 0);
+        if (!best || score < best.score) best = { f, d, score };
       }
       if (!best) { txt.textContent = "No open toilets found nearby"; return; }
       focusItem(best.f);
@@ -574,6 +580,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
   function showIdle() {
     showList(`<button class="res feature" data-act="late"><span class="i">⏰</span><span><b>Latest collections near me</b><small>Post boxes nearby, latest collection first</small></span></button>
       <button class="res feature" data-act="toilets"><span class="i">🚻</span><span><b>Toilets near me</b><small>Every type, nearest first</small></span></button>
+      <button class="res feature" data-act="cp"><span class="i">♿</span><span><b>Changing Places near me</b><small>Adult-sized bench and hoist</small></span></button>
       <button class="res feature" data-act="fuel"><span class="i">⛽</span><span><b>Petrol stations with toilets near me</b><small>Nearest first, open ones marked</small></span></button>
       <div class="empty">Search by post box number (like SG18 12), postcode, town or Post Office name.</div>`, []);
   }
@@ -602,12 +609,16 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
         c ? CATS[c][1] : "Public toilet",
         x.st === true ? `<span style="color:#14532D;font-weight:700">Open now</span>` : x.st === false ? `<span class="late">Closed now</span>` : "",
         fmtDist(x.d),
+        isCP(x.f) ? "Changing Places" : "",
+        assumed(x.f) ? "not confirmed" : "",
         customersOnly(x.f) ? "customers, just ask" : ""
       ].filter(Boolean).join(", ");
       return itemButton(x.f, bits, i);
     }).join(""), list.map(x => x.f));
   }
   const toiletsNearMe = () => toiletList("Toilets near me, nearest first", () => true, 5000, "No toilets recorded within 5 km.");
+  const cpNearMe = () => toiletList("Changing Places toilets, nearest first", isCP, 25000,
+    "None recorded within 25 km. These are rarer than standard accessible toilets.");
   const fuelNearMe = () => toiletList("Petrol stations with toilets, nearest first", isFuel, 15000,
     "None recorded within 15 km. If you know one, add it on toiletmap.org.uk and it'll appear here the next day.");
 
@@ -667,6 +678,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     if (b.dataset.act === "late") return latestNearMe();
     if (b.dataset.act === "fuel") return fuelNearMe();
     if (b.dataset.act === "toilets") return toiletsNearMe();
+    if (b.dataset.act === "cp") return cpNearMe();
     if (b.dataset.lat) { closeResults(); map.setView([+b.dataset.lat, +b.dataset.lon], 16); return; }
     const f = lastList[+b.dataset.i]; if (f) focusItem(f);
   });
