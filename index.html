@@ -78,6 +78,8 @@
   .nearest { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 58px; border: 0; border-radius: 14px; background: var(--teal); color: #fff; font: 700 19px/1.2 var(--font); cursor: pointer; }
   .nearest:active { transform: scale(.98); }
   .nearest[disabled] { opacity: .6; }
+  .hint { margin: 0; text-align: center; font-size: 14.5px; color: var(--muted); }
+  .hint[hidden] { display: none; }
   .layers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
   .chip { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 4px; border-radius: 10px; border: 2px solid var(--line); background: transparent; color: var(--ink); font: 400 12.5px/1.15 var(--font); cursor: pointer; }
   .chip .ico { font-size: 20px; line-height: 1; }
@@ -96,6 +98,8 @@
   .cl { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   .cl.toilet { background: var(--teal); } .cl.postbox { background: var(--red); }
   .cl.office { background: var(--blue); } .cl.locker { background: var(--plum); }
+  .area { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; text-align: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 5px rgba(0,0,0,.4); cursor: pointer; }
+  .area small { display: block; font-weight: 400; font-size: 10px; opacity: .9; margin-top: 2px; }
 
   .leaflet-popup-content-wrapper { border-radius: 12px; }
   .leaflet-popup-content { font-family: var(--font); font-size: 15px; margin: 12px 14px; min-width: 210px; color: #1C1F24; }
@@ -129,11 +133,12 @@
 
   <div class="panel">
     <button class="nearest" id="nearest"><span aria-hidden="true">🚻</span><span id="nearestText">Nearest open toilet</span></button>
+    <p class="hint" id="hint">Tap a type below to show it on the map</p>
     <div class="layers">
-      <button class="chip" data-layer="toilet"  style="--c:var(--teal)" aria-pressed="true"><span class="ico">🚻</span>Toilets<span class="n" id="n-toilet">0</span></button>
-      <button class="chip" data-layer="postbox" style="--c:var(--red)"  aria-pressed="true"><span class="ico">📮</span>Post boxes<span class="n" id="n-postbox">0</span></button>
-      <button class="chip" data-layer="office"  style="--c:var(--blue)" aria-pressed="true"><span class="ico">🏤</span>Post Offices<span class="n" id="n-office">0</span></button>
-      <button class="chip" data-layer="locker"  style="--c:var(--plum)" aria-pressed="true"><span class="ico">📦</span>Lockers<span class="n" id="n-locker">0</span></button>
+      <button class="chip" data-layer="toilet"  style="--c:var(--teal)" aria-pressed="false"><span class="ico">🚻</span>Toilets<span class="n" id="n-toilet">0</span></button>
+      <button class="chip" data-layer="postbox" style="--c:var(--red)"  aria-pressed="false"><span class="ico">📮</span>Post boxes<span class="n" id="n-postbox">0</span></button>
+      <button class="chip" data-layer="office"  style="--c:var(--blue)" aria-pressed="false"><span class="ico">🏤</span>Post Offices<span class="n" id="n-office">0</span></button>
+      <button class="chip" data-layer="locker"  style="--c:var(--plum)" aria-pressed="false"><span class="ico">📦</span>Lockers<span class="n" id="n-locker">0</span></button>
     </div>
   </div>
 </div>
@@ -219,14 +224,14 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 
   const groups = {}, enabled = {}, shown = {};
   for (const k of Object.values(KIND)) {
-    enabled[k] = true; shown[k] = new Set();
+    enabled[k] = false; shown[k] = new Set();
     groups[k] = L.markerClusterGroup({
       maxClusterRadius: 40, showCoverageOnHover: false, disableClusteringAtZoom: 17,
       iconCreateFunction: c => {
         const n = c.getChildCount(), s = n < 10 ? 34 : n < 100 ? 40 : 46;
         return L.divIcon({ html: `<div class="cl ${k}" style="width:${s}px;height:${s}px">${n}</div>`, className: "", iconSize: [s, s] });
       }
-    }).addTo(map);
+    });
   }
 
   // every point lives here, indexed by grid cell; only what's on screen gets a marker
@@ -246,6 +251,59 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       const c = grid.get(y + "," + x); if (c) for (const f of c) if (bounds.contains([f.lat, f.lon])) out.push(f);
     }
     return out;
+  }
+
+  // ---------- counts per area, for when the map is zoomed out ----------
+  const CLUSTER_ZOOMS = [4, 5, 6, 7, 8, 9, 10, 11, 12].filter(z => z < MIN_ZOOM);
+  const clusterIdx = new Map();
+  const clusterLayer = L.layerGroup().addTo(map);
+  let clustersReady = false;
+  const cellsAcross = z => Math.pow(2, z) * 2;          // two cells per map tile
+  const cellX = (lon, z) => Math.floor((lon + 180) / 360 * cellsAcross(z));
+  function cellY(lat, z) {
+    const r = lat * Math.PI / 180;
+    return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * cellsAcross(z));
+  }
+  function buildClusters() {
+    for (const z of CLUSTER_ZOOMS) {
+      const m = new Map();
+      for (const f of items) {
+        const key = cellX(f.lon, z) + "," + cellY(f.lat, z);
+        let c = m.get(key);
+        if (!c) m.set(key, c = { sx: 0, sy: 0, n: { toilet: 0, postbox: 0, office: 0, locker: 0 }, total: 0 });
+        c.sx += f.lon; c.sy += f.lat; c.n[f.kind]++; c.total++;
+      }
+      clusterIdx.set(z, m);
+    }
+    clustersReady = true;
+  }
+  function renderClusters(z) {
+    clusterLayer.clearLayers();
+    const zz = Math.max(CLUSTER_ZOOMS[0], Math.min(z, MIN_ZOOM - 1));
+    const m = clusterIdx.get(zz);
+    if (!m) return;
+    const b = map.getBounds();
+    const x0 = cellX(b.getWest(), zz), x1 = cellX(b.getEast(), zz);
+    const y0 = cellY(b.getNorth(), zz), y1 = cellY(b.getSouth(), zz);
+    const counts = { toilet: 0, postbox: 0, office: 0, locker: 0 };
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+      const c = m.get(x + "," + y);
+      if (!c) continue;
+      let total = 0, top = null;
+      for (const k in c.n) {
+        counts[k] += c.n[k];
+        if (!enabled[k]) continue;
+        total += c.n[k];
+        if (!top || c.n[k] > c.n[top]) top = k;
+      }
+      if (!total) continue;
+      const s = total < 50 ? 38 : total < 500 ? 46 : total < 5000 ? 54 : 62;
+      const label = total >= 1000 ? (total / 1000).toFixed(total < 10000 ? 1 : 0) + "k" : total;
+      const at = [c.sy / c.total, c.sx / c.total];
+      L.marker(at, { keyboard: false, icon: L.divIcon({ html: `<div class="area cl ${top}" style="width:${s}px;height:${s}px">${label}<small>here</small></div>`, className: "", iconSize: [s, s] }) })
+        .on("click", () => map.setView(at, Math.min(z + 3, MIN_ZOOM + 1))).addTo(clusterLayer);
+    }
+    for (const k in counts) $("n-" + k).textContent = counts[k].toLocaleString("en-GB");
   }
 
   // ---------- helpers ----------
@@ -385,13 +443,21 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 
   // ---------- draw only what's on screen ----------
   function render() {
+    const z = map.getZoom();
+    $("hint").hidden = Object.values(enabled).some(Boolean);
+    if (clustersReady && z < MIN_ZOOM) {
+      for (const k in shown) if (shown[k].size) { groups[k].removeLayers([...shown[k]].map(f => f.marker)); shown[k] = new Set(); }
+      renderClusters(z);
+      return;
+    }
+    clusterLayer.clearLayers();
     const counts = { toilet: 0, postbox: 0, office: 0, locker: 0 };
     const want = { toilet: new Set(), postbox: new Set(), office: new Set(), locker: new Set() };
     if (map.getZoom() >= MIN_ZOOM) {
       const view = map.getBounds();
       for (const f of itemsIn(view.pad(0.3))) {
-        want[f.kind].add(f);
         if (view.contains([f.lat, f.lon])) counts[f.kind]++;
+        if (enabled[f.kind]) want[f.kind].add(f);
       }
     }
     for (const k in want) {
@@ -401,7 +467,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       if (del.length) groups[k].removeLayers(del);
       if (add.length) groups[k].addLayers(add);
       shown[k] = want[k];
-      $("n-" + k).textContent = map.getZoom() >= MIN_ZOOM ? counts[k].toLocaleString("en-GB") : "–";
+      $("n-" + k).textContent = counts[k].toLocaleString("en-GB");
     }
   }
   function focusItem(f) {
@@ -429,6 +495,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       }
       map.attributionControl.addAttribution('Toilets © <a href="https://www.toiletmap.org.uk/dataset">Toilet Map</a> CC BY 4.0');
       const d = new Date(data.meta.built);
+      buildClusters();
       setStatus(`Data updated ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`, null, 3000);
     } catch (e) {
       live = true;
@@ -515,7 +582,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 
   map.on("moveend", () => {
     render();
-    if (map.getZoom() < MIN_ZOOM) setStatus("Zoom in to see points", null, 2500);
+    if (map.getZoom() < MIN_ZOOM && !clustersReady) setStatus("Zoom in to see points", null, 2500);
     clearTimeout(liveT); liveT = setTimeout(loadView, 350);
   });
 
@@ -524,6 +591,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     const k = btn.dataset.layer; enabled[k] = !enabled[k];
     btn.setAttribute("aria-pressed", enabled[k]);
     enabled[k] ? map.addLayer(groups[k]) : map.removeLayer(groups[k]);
+    render();
   }));
 
   // ---------- location ----------
