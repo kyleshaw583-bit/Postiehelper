@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#B5121B">
+<title>Postie Helper</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📮</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<style>
+  :root {
+    --red: #B5121B; --teal: #0F7A73; --blue: #1F4E8C; --plum: #6B3FA0;
+    --ink: #1C1F24; --paper: #FFFFFF; --muted: #5B6470; --line: #E2E5EA; --hover: #F2F4F7;
+    --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --ink: #F2F4F7; --paper: #1A1D22; --muted: #A6AEB9; --line: #2F343C; --hover: #252A31; }
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font); color: var(--ink); background: var(--paper); overflow: hidden; font-size: 16px; }
+  .app { position: relative; height: 100%; display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 0; }
+
+  /* top bar: search + locate */
+  .top { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 700; display: flex; gap: 8px; }
+  .search { flex: 1; position: relative; }
+  .search input {
+    width: 100%; height: 50px; border: 0; border-radius: 14px; padding: 0 44px 0 42px;
+    font: 400 16px var(--font); color: var(--ink); background: var(--paper);
+    box-shadow: 0 2px 10px rgba(0,0,0,.2); -webkit-appearance: none; appearance: none;
+  }
+  .search input::-webkit-search-cancel-button { display: none; }
+  .search .mag { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 17px; pointer-events: none; opacity: .7; }
+  .search .clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 38px; height: 38px; border: 0; background: none; color: var(--muted); font-size: 20px; cursor: pointer; display: none; }
+  .search.has-text .clear { display: block; }
+  .locate { flex: none; width: 50px; height: 50px; border-radius: 14px; border: 0; background: var(--paper); color: var(--ink); font-size: 22px; box-shadow: 0 2px 10px rgba(0,0,0,.2); cursor: pointer; }
+
+  .results {
+    position: absolute; top: 66px; left: 10px; right: 10px; z-index: 700;
+    background: var(--paper); border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    max-height: min(60vh, 460px); overflow-y: auto; overscroll-behavior: contain;
+  }
+  .results[hidden] { display: none; }
+  .results h4 { margin: 0; padding: 12px 14px 4px; font-size: 13px; color: var(--muted); font-weight: 700; }
+  .res { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; border: 0; background: none; color: var(--ink); padding: 10px 14px; font: 400 15px/1.3 var(--font); cursor: pointer; border-top: 1px solid var(--line); }
+  .res:first-of-type { border-top: 0; }
+  .res:hover, .res:focus-visible { background: var(--hover); }
+  .res .i { font-size: 20px; flex: none; width: 26px; text-align: center; }
+  .res b { display: block; font-weight: 700; }
+  .res small { color: var(--muted); font-size: 13.5px; }
+  .res .late { color: var(--red); font-weight: 700; }
+  .results .empty { padding: 14px; color: var(--muted); font-size: 14.5px; }
+  .res.feature { background: color-mix(in srgb, var(--red) 8%, transparent); }
+
+  .status {
+    position: absolute; top: 68px; left: 50%; transform: translateX(-50%); z-index: 600;
+    display: flex; align-items: center; gap: 8px; max-width: calc(100% - 20px);
+    background: var(--paper); color: var(--ink); border-radius: 18px; padding: 7px 14px;
+    font-size: 14px; line-height: 1.3; box-shadow: 0 2px 10px rgba(0,0,0,.18); word-break: break-word;
+    transition: opacity .3s;
+  }
+  .status.hide { opacity: 0; pointer-events: none; }
+  .status .spin { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--red); border-radius: 50%; animation: spin .8s linear infinite; display: none; flex: none; }
+  .status.loading .spin { display: block; }
+  .status.warn { background: #FFF4D6; color: #5A4300; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* bottom panel */
+  .panel { background: var(--paper); border-top: 1px solid var(--line); padding: 12px 12px 14px; display: grid; gap: 10px; box-shadow: 0 -4px 16px rgba(0,0,0,.08); z-index: 600; }
+  .nearest { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 58px; border: 0; border-radius: 14px; background: var(--teal); color: #fff; font: 700 19px/1.2 var(--font); cursor: pointer; }
+  .nearest:active { transform: scale(.98); }
+  .nearest[disabled] { opacity: .6; }
+  .layers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .chip { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 4px; border-radius: 10px; border: 2px solid var(--line); background: transparent; color: var(--ink); font: 400 12.5px/1.15 var(--font); cursor: pointer; }
+  .chip .ico { font-size: 20px; line-height: 1; }
+  .chip .n { font-weight: 700; font-size: 13px; }
+  .chip[aria-pressed="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+  .chip[aria-pressed="false"] { opacity: .5; }
+  button:focus-visible, input:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+
+  /* markers */
+  .pin { width: 34px; height: 34px; border-radius: 50% 50% 50% 4px; transform: rotate(-45deg); display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .pin span { transform: rotate(45deg); font-size: 17px; line-height: 1; }
+  .pin.toilet { background: var(--teal); } .pin.postbox { background: var(--red); }
+  .pin.office { background: var(--blue); } .pin.locker { background: var(--plum); }
+  .pin.hl { outline: 4px solid #FFD200; }
+  .cl { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .cl.toilet { background: var(--teal); } .cl.postbox { background: var(--red); }
+  .cl.office { background: var(--blue); } .cl.locker { background: var(--plum); }
+
+  .leaflet-popup-content-wrapper { border-radius: 12px; }
+  .leaflet-popup-content { font-family: var(--font); font-size: 15px; margin: 12px 14px; min-width: 210px; color: #1C1F24; }
+  .pop h3 { margin: 0 0 6px; font-size: 17px; }
+  .pop dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+  .pop dt { color: #5B6470; } .pop dd { margin: 0; }
+  .pop .go { display: block; margin-top: 10px; text-align: center; padding: 10px; border-radius: 10px; background: #1C1F24; color: #fff !important; text-decoration: none; font-weight: 700; }
+  .badge { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-bottom: 6px; }
+  .badge.open { background: #DDF3E4; color: #14532D; } .badge.shut { background: #FDE2E2; color: #7F1D1D; }
+  .pop .notes { margin-top: 8px; font-size: 14px; color: #5B6470; max-height: 6.5em; overflow: auto; white-space: pre-line; }
+  .pop .src { margin-top: 8px; font-size: 12.5px; } .pop .src a { color: #1F4E8C; }
+  .you { width: 18px; height: 18px; border-radius: 50%; background: #1A73E8; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(26,115,232,.25); }
+  @media (prefers-reduced-motion: reduce) { .status .spin { animation: none; } .status { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map" aria-label="Map"></div>
+
+  <div class="top">
+    <div class="search" id="searchWrap">
+      <span class="mag" aria-hidden="true">🔍</span>
+      <input id="q" type="search" placeholder="Post box number, postcode or town" autocomplete="off" enterkeyhint="search" aria-label="Search" aria-controls="results">
+      <button class="clear" id="clear" aria-label="Clear search">✕</button>
+    </div>
+    <button class="locate" id="locate" aria-label="Centre on my location">◎</button>
+  </div>
+  <div class="results" id="results" hidden role="listbox"></div>
+  <div class="status" id="status" role="status"><div class="spin"></div><span id="statusText">Starting…</span></div>
+
+  <div class="panel">
+    <button class="nearest" id="nearest"><span aria-hidden="true">🚻</span><span id="nearestText">Nearest open toilet</span></button>
+    <div class="layers">
+      <button class="chip" data-layer="toilet"  style="--c:var(--teal)" aria-pressed="true"><span class="ico">🚻</span>Toilets<span class="n" id="n-toilet">0</span></button>
+      <button class="chip" data-layer="postbox" style="--c:var(--red)"  aria-pressed="true"><span class="ico">📮</span>Post boxes<span class="n" id="n-postbox">0</span></button>
+      <button class="chip" data-layer="office"  style="--c:var(--blue)" aria-pressed="true"><span class="ico">🏤</span>Post Offices<span class="n" id="n-office">0</span></button>
+      <button class="chip" data-layer="locker"  style="--c:var(--plum)" aria-pressed="true"><span class="ico">📦</span>Lockers<span class="n" id="n-locker">0</span></button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script>
+if (!window.L || !L.markerClusterGroup) {
+  document.getElementById("statusText").textContent = "Map library didn't load. Check your connection and reload";
+  document.getElementById("status").classList.add("warn");
+  throw new Error("Libraries missing");
+}
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+
+(() => {
+  const MIN_ZOOM = 13;
+  const CELL = 0.02;   // grid cell size in degrees for fast lookups
+  const ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+  const KIND = { t: "toilet", p: "postbox", o: "office", l: "locker" };
+  const ICONS = { toilet: "🚻", postbox: "📮", office: "🏤", locker: "📦" };
+  const NAMES = { toilet: "Toilet", postbox: "Post box", office: "Post Office", locker: "Parcel locker" };
+  const DAYC = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+  // ---------- map ----------
+  const map = L.map("map", { zoomControl: false }).setView([52.087, -0.264], 15); // Biggleswade
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+
+  const groups = {}, enabled = {}, shown = {};
+  for (const k of Object.values(KIND)) {
+    enabled[k] = true; shown[k] = new Set();
+    groups[k] = L.markerClusterGroup({
+      maxClusterRadius: 40, showCoverageOnHover: false, disableClusteringAtZoom: 17,
+      iconCreateFunction: c => {
+        const n = c.getChildCount(), s = n < 10 ? 34 : n < 100 ? 40 : 46;
+        return L.divIcon({ html: `<div class="cl ${k}" style="width:${s}px;height:${s}px">${n}</div>`, className: "", iconSize: [s, s] });
+      }
+    }).addTo(map);
+  }
+
+  // every point lives here, indexed by grid cell; only what's on screen gets a marker
+  const items = [], grid = new Map(), ids = new Set();
+  const cellKey = (lat, lon) => Math.floor(lat / CELL) + "," + Math.floor(lon / CELL);
+  function addItem(f) {
+    if (f.id) { if (ids.has(f.id)) return; ids.add(f.id); }
+    items.push(f);
+    const key = cellKey(f.lat, f.lon);
+    (grid.get(key) || grid.set(key, []).get(key)).push(f);
+  }
+  function itemsIn(bounds) {
+    const out = [];
+    const y0 = Math.floor(bounds.getSouth() / CELL), y1 = Math.floor(bounds.getNorth() / CELL);
+    const x0 = Math.floor(bounds.getWest() / CELL), x1 = Math.floor(bounds.getEast() / CELL);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const c = grid.get(y + "," + x); if (c) for (const f of c) if (bounds.contains([f.lat, f.lon])) out.push(f);
+    }
+    return out;
+  }
+
+  // ---------- helpers ----------
+  const $ = id => document.getElementById(id);
+  const statusEl = $("status"), statusText = $("statusText");
+  let hideT;
+  function setStatus(text, mode, hideAfter) {
+    clearTimeout(hideT);
+    statusText.textContent = text;
+    statusEl.classList.remove("hide");
+    statusEl.classList.toggle("loading", mode === "loading");
+    statusEl.classList.toggle("warn", mode === "warn");
+    if (hideAfter) hideT = setTimeout(() => statusEl.classList.add("hide"), hideAfter);
+  }
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  const yn = v => v === "yes" || v === "true" ? "Yes" : v === "no" || v === "false" ? "No" : null;
+  function distM(a, b) {
+    const R = 6371000, r = x => x * Math.PI / 180, dLat = r(b.lat - a.lat), dLon = r(b.lon - a.lon);
+    const h = Math.sin(dLat/2)**2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  const fmtDist = m => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
+  const origin = () => you || (c => ({ lat: c.lat, lon: c.lng }))(map.getCenter());
+  const nowMins = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+  const today = () => (new Date().getDay() + 6) % 7;   // 0 = Monday
+  const toMin = t => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+
+  // ---------- post box collection times (OSM format, e.g. "Mo-Fr 17:30; Sa 12:00") ----------
+  function collectionsOn(ct, day) {
+    if (!ct) return null;
+    let res = null;
+    for (let rule of ct.split(";")) {
+      rule = rule.trim(); if (!rule) continue;
+      const m = rule.match(/^((?:(?:Mo|Tu|We|Th|Fr|Sa|Su|PH)(?:\s*-\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))?[\s,]*)+)(.*)$/);
+      const days = m ? m[1] : null, times = m ? m[2] : rule;
+      let applies = !days;
+      if (days) for (const part of days.split(/[\s,]+/).filter(Boolean)) {
+        if (part === "PH") continue;
+        const [a, b] = part.split("-").map(s => s.trim());
+        const ia = DAYC.indexOf(a), ib = b ? DAYC.indexOf(b) : ia;
+        if (ia < 0 || ib < 0) continue;
+        if (ia <= ib ? day >= ia && day <= ib : day >= ia || day <= ib) applies = true;
+      }
+      if (!applies) continue;
+      if (/\boff\b|closed/i.test(times)) { res = []; continue; }
+      const ts = (times.match(/\d{1,2}:\d{2}/g) || []).map(t => t.padStart(5, "0"));
+      if (ts.length) res = ts;
+    }
+    return res || [];   // times are recorded, just none for this day
+  }
+  const lastToday = f => { const c = collectionsOn(f.tags.collection_times, today()); return c && c.length ? c.slice().sort().pop() : c ? "" : null; };
+  function collectionLine(f) {
+    const last = lastToday(f);
+    if (last === null) return "Collection times not recorded";
+    if (last === "") return "No collection today";
+    return toMin(last) <= nowMins() ? `Last collection today was ${last}` : `Last collection today ${last}`;
+  }
+
+  // ---------- Toilet Map opening times: Mon-first array, [] = closed, ["00:00","00:00"] = 24h ----------
+  function openState(times) {
+    if (!Array.isArray(times) || times.length !== 7) return null;
+    const d = today(), m = nowMins();
+    const within = (t, mm) => { if (!t || t.length < 2) return false; const a = toMin(t[0]), b = toMin(t[1]); if (a === 0 && b === 0) return true; return b <= a ? mm >= a || mm < b : mm >= a && mm < b; };
+    const y = times[(d + 6) % 7], spill = y && y.length === 2 && toMin(y[1]) < toMin(y[0]) && m < toMin(y[1]);
+    return within(times[d], m) || !!spill;
+  }
+  function hoursToday(times) {
+    if (!Array.isArray(times) || times.length !== 7) return null;
+    const t = times[today()];
+    if (!t || t.length < 2) return "Closed today";
+    return t[0] === "00:00" && t[1] === "00:00" ? "24 hours" : `${t[0]} to ${t[1]}`;
+  }
+
+  // ---------- popups ----------
+  const titleOf = f => {
+    if (f.src === "tm") return f.tags.name || "Toilet";
+    if (f.kind === "postbox") return f.tags.ref ? `Post box ${f.tags.ref}` : "Post box";
+    return f.tags.name || NAMES[f.kind];
+  };
+  function popupHtml(f) {
+    const t = f.tags, rows = [];
+    const add = (k, v) => { if (v) rows.push(`<dt>${k}</dt><dd>${v}</dd>`); };
+    let badge = "", extra = "";
+    if (f.src === "tm") {
+      const st = openState(f.times);
+      if (st === true) badge = `<span class="badge open">Open now</span>`;
+      if (st === false) badge = `<span class="badge shut">Closed now</span>`;
+      add("Today", hoursToday(f.times));
+      add("Charge", t.no_payment === "true" ? "Free" : t.no_payment === "false" ? (t.payment_details ? esc(t.payment_details) : "Yes") : null);
+      add("Accessible", yn(t.accessible));
+      add("RADAR key", t.radar === "true" ? "Needed" : null);
+      add("Baby change", yn(t.baby_change));
+      add("For", [t.women === "true" && "women", t.men === "true" && "men", t.all_gender === "true" && "all genders"].filter(Boolean).join(", ") || null);
+      if (t.notes && t.notes.length > 1) extra += `<div class="notes">${esc(t.notes)}</div>`;
+      extra += `<div class="src"><a href="https://www.toiletmap.org.uk/loos/${encodeURIComponent(t.id)}" target="_blank" rel="noopener">View or update on Toilet Map</a></div>`;
+    } else if (f.kind === "toilet") {
+      add("Charge", t.fee === "yes" ? (t.charge ? esc(t.charge) : "Yes") : t.fee === "no" ? "Free" : null);
+      add("Open", t.opening_hours ? esc(t.opening_hours) : null);
+      add("Wheelchair", yn(t.wheelchair));
+      add("Baby change", yn(t.changing_table));
+    } else if (f.kind === "postbox") {
+      const c = collectionsOn(t.collection_times, today());
+      add("Today", c === null ? null : c.length ? c.join(", ") : "No collection");
+      add("All times", t.collection_times ? esc(t.collection_times).replace(/;\s*/g, "<br>") : "Not recorded");
+      add("Checked", t["check_date:collection_times"] ? esc(t["check_date:collection_times"]) : null);
+      add("Type", t["post_box:type"] ? esc(t["post_box:type"]) : null);
+      add("Cypher", t.royal_cypher ? esc(t.royal_cypher) : null);
+    } else {
+      add("Operator", t.operator ? esc(t.operator) : t.brand ? esc(t.brand) : null);
+      add("Open", t.opening_hours ? esc(t.opening_hours).replace(/;\s*/g, "<br>") : null);
+      add("Address", [t["addr:housenumber"], t["addr:street"], t["addr:postcode"]].filter(Boolean).map(esc).join(" ") || null);
+    }
+    if (you) add("Distance", fmtDist(distM(you, f)));
+    if (!rows.length) rows.push(`<dt>Details</dt><dd>None recorded yet</dd>`);
+    const dir = `https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}&travelmode=walking`;
+    return `<div class="pop"><h3>${ICONS[f.kind]} ${esc(titleOf(f))}</h3>${badge}<dl>${rows.join("")}</dl>${extra}<a class="go" href="${dir}" target="_blank" rel="noopener">Walking directions</a></div>`;
+  }
+  function markerFor(f) {
+    if (!f.marker) f.marker = L.marker([f.lat, f.lon], {
+      icon: L.divIcon({ html: `<div class="pin ${f.kind}"><span>${ICONS[f.kind]}</span></div>`, className: "", iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }),
+      title: titleOf(f)
+    }).bindPopup(() => popupHtml(f), { maxWidth: 290 });
+    return f.marker;
+  }
+
+  // ---------- draw only what's on screen ----------
+  function render() {
+    const counts = { toilet: 0, postbox: 0, office: 0, locker: 0 };
+    const want = { toilet: new Set(), postbox: new Set(), office: new Set(), locker: new Set() };
+    if (map.getZoom() >= MIN_ZOOM) {
+      const view = map.getBounds();
+      for (const f of itemsIn(view.pad(0.3))) {
+        want[f.kind].add(f);
+        if (view.contains([f.lat, f.lon])) counts[f.kind]++;
+      }
+    }
+    for (const k in want) {
+      const add = [], del = [];
+      for (const f of want[k]) if (!shown[k].has(f)) add.push(markerFor(f));
+      for (const f of shown[k]) if (!want[k].has(f)) del.push(f.marker);
+      if (del.length) groups[k].removeLayers(del);
+      if (add.length) groups[k].addLayers(add);
+      shown[k] = want[k];
+      $("n-" + k).textContent = map.getZoom() >= MIN_ZOOM ? counts[k].toLocaleString("en-GB") : "–";
+    }
+  }
+  function focusItem(f) {
+    closeResults();
+    map.setView([f.lat, f.lon], Math.max(map.getZoom(), 17), { animate: false });
+    render();
+    if (!enabled[f.kind]) document.querySelector(`.chip[data-layer="${f.kind}"]`).click();
+    groups[f.kind].zoomToShowLayer(markerFor(f), () => {
+      f.marker.openPopup();
+      document.querySelectorAll(".pin.hl").forEach(p => p.classList.remove("hl"));
+      f.marker.getElement()?.querySelector(".pin")?.classList.add("hl");
+    });
+  }
+
+  // ---------- data: nightly file first, live servers as a fallback ----------
+  let live = false, toiletsFromFile = false;
+  async function loadData() {
+    setStatus("Loading map data…", "loading");
+    try {
+      const res = await fetch("data/points.json");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      for (const p of data.points) {
+        addItem({ id: p.s === "tm" ? "tm" + p.t.id : p.id, kind: KIND[p.k], src: p.s, lat: p.a, lon: p.o, tags: p.t, times: p.h });
+      }
+      map.attributionControl.addAttribution('Toilets © <a href="https://www.toiletmap.org.uk/dataset">Toilet Map</a> CC BY 4.0');
+      const d = new Date(data.meta.built);
+      setStatus(`Data updated ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`, null, 3000);
+    } catch (e) {
+      live = true;
+      await loadToiletCsv();
+      setStatus("Using live data", null, 2500);
+      loadView();
+    }
+    render();
+  }
+
+  // Toilet Map CSV uploaded to the repo (only used when there's no nightly data file)
+  async function loadToiletCsv() {
+    if (!window.Papa) return;
+    try {
+      let file = null;
+      const head = await fetch("toilets.csv", { method: "HEAD" }).catch(() => null);
+      if (head && head.ok) file = "toilets.csv";
+      else {
+        const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split("/").filter(Boolean)[0];
+        if (m && repo) {
+          const r = await fetch(`https://api.github.com/repos/${m[1]}/${repo}/contents/`);
+          if (r.ok) { const n = (await r.json()).map(x => x.name).filter(x => /toilet.*\.csv$/i.test(x)).sort().pop(); if (n) file = encodeURIComponent(n); }
+        }
+      }
+      if (!file) return;
+      const rows = Papa.parse(await (await fetch(file)).text(), { header: true, skipEmptyLines: true }).data;
+      for (const t of rows) {
+        if (t.active !== "true") continue;
+        const lat = parseFloat(t.latitude), lon = parseFloat(t.longitude);
+        if (!(lat > 49.8 && lat < 61 && lon > -8.7 && lon < 2)) continue;
+        let times = null; try { times = t.opening_times ? JSON.parse(t.opening_times) : null; } catch (e) {}
+        addItem({ id: "tm" + t.id, kind: "toilet", src: "tm", lat, lon, tags: t, times });
+      }
+      toiletsFromFile = true;
+    } catch (e) {}
+  }
+
+  // live OpenStreetMap data for the area on screen
+  let preferred = 0;
+  async function overpass(q, onTry) {
+    const fails = [];
+    for (let i = 0; i < ENDPOINTS.length; i++) {
+      const idx = (preferred + i) % ENDPOINTS.length, ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 45000);
+      onTry && onTry(i + 1);
+      try {
+        const res = await fetch(ENDPOINTS[idx] + "?data=" + encodeURIComponent(q), { signal: ctrl.signal });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = await res.json(); preferred = idx; return json;
+      } catch (e) { fails.push(new URL(ENDPOINTS[idx]).hostname + ": " + (e.name === "AbortError" ? "timed out" : e.message)); }
+      finally { clearTimeout(timer); }
+    }
+    throw new Error(fails.join(" | "));
+  }
+  function addOsm(el) {
+    const t = el.tags || {}, lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+    let kind = null;
+    if (t.amenity === "post_box") kind = "postbox";
+    else if (t.amenity === "post_office") kind = "office";
+    else if (t.amenity === "parcel_locker" && /royal\s*mail/i.test(`${t.brand || ""} ${t.operator || ""} ${t.name || ""}`)) kind = "locker";
+    else if (t.amenity === "toilets" && !toiletsFromFile && t.access !== "private" && t.access !== "no") kind = "toilet";
+    if (kind && lat != null) addItem({ id: el.type[0] + el.id, kind, src: "osm", lat, lon, tags: t });
+  }
+  const loadedBoxes = [];
+  let busy = false, pending = false, liveT;
+  async function loadView() {
+    if (!live || map.getZoom() < MIN_ZOOM) return;
+    const view = map.getBounds();
+    if (loadedBoxes.some(b => b.contains(view))) return;
+    if (busy) { pending = true; return; }
+    busy = true;
+    const b = view.pad(0.15), bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
+    try {
+      const q = `[out:json][timeout:30];(${toiletsFromFile ? "" : `nwr["amenity"="toilets"](${bbox});`}node["amenity"="post_box"](${bbox});nwr["amenity"="post_office"](${bbox});nwr["amenity"="parcel_locker"](${bbox}););out center tags;`;
+      const data = await overpass(q, n => setStatus(n === 1 ? "Loading this area…" : `Loading this area… (server ${n})`, "loading"));
+      data.elements.forEach(addOsm);
+      loadedBoxes.push(b);
+      setStatus("Area loaded", null, 1500);
+    } catch (e) {
+      setStatus(`Couldn't load this area. ${e.message}. Retrying in 30s`, "warn");
+      clearTimeout(liveT); liveT = setTimeout(loadView, 30000);
+    } finally { busy = false; render(); if (pending) { pending = false; loadView(); } }
+  }
+
+  map.on("moveend", () => {
+    render();
+    if (map.getZoom() < MIN_ZOOM) setStatus("Zoom in to see points", null, 2500);
+    clearTimeout(liveT); liveT = setTimeout(loadView, 350);
+  });
+
+  // ---------- layer chips ----------
+  document.querySelectorAll(".chip").forEach(btn => btn.addEventListener("click", () => {
+    const k = btn.dataset.layer; enabled[k] = !enabled[k];
+    btn.setAttribute("aria-pressed", enabled[k]);
+    enabled[k] ? map.addLayer(groups[k]) : map.removeLayer(groups[k]);
+  }));
+
+  // ---------- location ----------
+  let you = null, youMarker = null, followOnce = true;
+  function onPos(p) {
+    you = { lat: p.coords.latitude, lon: p.coords.longitude };
+    if (!youMarker) youMarker = L.marker([you.lat, you.lon], { icon: L.divIcon({ html: '<div class="you"></div>', className: "", iconSize: [18, 18] }), zIndexOffset: 1000, interactive: false }).addTo(map);
+    else youMarker.setLatLng([you.lat, you.lon]);
+    if (followOnce) { followOnce = false; map.setView([you.lat, you.lon], 16); }
+  }
+  if ("geolocation" in navigator) navigator.geolocation.watchPosition(onPos, () => {}, { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+  $("locate").addEventListener("click", () => {
+    if (you) map.setView([you.lat, you.lon], Math.max(map.getZoom(), 16));
+    else { followOnce = true; navigator.geolocation?.getCurrentPosition(onPos, () => setStatus("Location is off. Turn it on in your browser settings", "warn", 4000), { enableHighAccuracy: true, timeout: 15000 }); }
+  });
+
+  // ---------- nearest open toilet ----------
+  $("nearest").addEventListener("click", async () => {
+    const btn = $("nearest"), txt = $("nearestText"), o = origin();
+    btn.disabled = true; txt.textContent = "Searching…";
+    try {
+      if (live && !toiletsFromFile) {
+        const data = await overpass(`[out:json][timeout:30];nwr["amenity"="toilets"](around:3000,${o.lat},${o.lon});out center tags;`);
+        data.elements.forEach(addOsm);
+      }
+      let best = null;
+      for (const f of items) {
+        if (f.kind !== "toilet" || (f.src === "tm" && openState(f.times) === false)) continue;
+        const d = distM(o, f);
+        if (!best || d < best.d) best = { f, d };
+      }
+      if (!best) { txt.textContent = "No open toilets found nearby"; return; }
+      focusItem(best.f);
+      txt.textContent = `Nearest open toilet: ${fmtDist(best.d)}`;
+    } catch (e) { txt.textContent = "Search failed. Tap to retry"; }
+    finally { btn.disabled = false; setTimeout(() => { if (!btn.disabled) txt.textContent = "Nearest open toilet"; }, 8000); }
+  });
+
+  // ---------- search ----------
+  const q = $("q"), results = $("results"), wrap = $("searchWrap");
+  let searchSeq = 0, searchT;
+  const norm = s => (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const closeResults = () => { results.hidden = true; q.blur(); };
+  const reFull = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i, reOut = /^[A-Z]{1,2}\d[A-Z\d]?$/i;
+
+  function itemButton(f, sub, i) {
+    return `<button class="res" data-i="${i}"><span class="i">${ICONS[f.kind]}</span><span><b>${esc(titleOf(f))}</b><small>${sub}</small></span></button>`;
+  }
+  let lastList = [];
+  function showList(html, list) { lastList = list; results.innerHTML = html; results.hidden = false; }
+
+  function showIdle() {
+    showList(`<button class="res feature" data-act="late"><span class="i">⏰</span><span><b>Latest collections near me</b><small>Post boxes nearby, latest collection first</small></span></button>
+      <div class="empty">Search by post box number (like SG18 12), postcode, town or Post Office name.</div>`, []);
+  }
+
+  function latestNearMe() {
+    const o = origin();
+    const box = L.latLng(o.lat, o.lon).toBounds(3000);
+    const list = itemsIn(box).filter(f => f.kind === "postbox")
+      .map(f => ({ f, d: distM(o, f), last: lastToday(f) }))
+      .filter(x => x.last && x.d <= 1500 && toMin(x.last) > nowMins())
+      .sort((a, b) => b.last.localeCompare(a.last) || a.d - b.d).slice(0, 15);
+    if (!list.length) return showList(`<h4>Latest collections near me</h4><div class="empty">No more collections today within 1.5 km, or collection times aren't recorded for boxes here.</div>`, []);
+    showList(`<h4>Collections still to come today, within 1.5 km</h4>` +
+      list.map((x, i) => itemButton(x.f, `<span class="late">Last ${x.last}</span>, ${fmtDist(x.d)}`, i)).join(""), list.map(x => x.f));
+  }
+
+  async function runSearch(text) {
+    const seq = ++searchSeq, raw = text.trim(), n = norm(raw), low = raw.toLowerCase();
+    if (!raw) return showIdle();
+    const o = origin();
+    // 1) matches in the loaded data
+    const hits = [];
+    if (n.length >= 2) for (const f of items) {
+      let match = false;
+      if (f.kind === "postbox") { const r = f.nref ?? (f.nref = norm(f.tags.ref)); match = r && (r.startsWith(n) || (n.length >= 4 && r.includes(n))); }
+      else if (low.length >= 3) match = (f.tags.name || "").toLowerCase().includes(low);
+      if (match) hits.push({ f, d: distM(o, f) });
+      if (hits.length > 400) break;
+    }
+    hits.sort((a, b) => a.d - b.d);
+    const top = hits.slice(0, 15);
+    const itemsHtml = top.map((x, i) => itemButton(x.f, (x.f.kind === "postbox" ? collectionLine(x.f) + ", " : "") + fmtDist(x.d), i)).join("");
+    const draw = placesHtml => showList(
+      (placesHtml ? `<h4>Places</h4>${placesHtml}` : "") +
+      (top.length ? `<h4>${top[0].f.kind === "postbox" ? "Post boxes" : "Matches"}</h4>${itemsHtml}` : "") +
+      (!top.length && !placesHtml ? `<div class="empty">Nothing found for “${esc(raw)}”${live ? ". Only areas you've viewed are searchable in live mode" : ""}.</div>` : ""),
+      top.map(x => x.f));
+    draw("");
+    // 2) places and postcodes (postcodes.io)
+    let url = null;
+    if (reFull.test(raw)) url = `https://api.postcodes.io/postcodes/${encodeURIComponent(raw)}`;
+    else if (reOut.test(raw)) url = `https://api.postcodes.io/outcodes/${encodeURIComponent(raw)}`;
+    else if (/^[a-z][a-z '\-]{2,}$/i.test(raw)) url = `https://api.postcodes.io/places?q=${encodeURIComponent(raw)}&limit=4`;
+    if (!url) return;
+    try {
+      const j = await (await fetch(url)).json();
+      if (seq !== searchSeq || !j.result) return;
+      const arr = Array.isArray(j.result) ? j.result : [j.result];
+      const places = arr.filter(p => p.latitude).map(p => ({
+        lat: p.latitude, lon: p.longitude,
+        name: p.postcode || p.outcode || p.name_1,
+        sub: p.postcode ? [p.admin_ward, p.admin_district].filter(Boolean).join(", ") : p.outcode ? (p.admin_district || []).slice(0, 2).join(", ") : [p.county_unitary, p.region].filter(Boolean).join(", ")
+      }));
+      draw(places.map(p => `<button class="res" data-lat="${p.lat}" data-lon="${p.lon}"><span class="i">📍</span><span><b>${esc(p.name)}</b><small>${esc(p.sub || "")}</small></span></button>`).join(""));
+    } catch (e) {}
+  }
+
+  q.addEventListener("focus", () => { if (!q.value.trim()) showIdle(); });
+  q.addEventListener("input", () => {
+    wrap.classList.toggle("has-text", !!q.value);
+    clearTimeout(searchT); searchT = setTimeout(() => runSearch(q.value), 250);
+  });
+  q.addEventListener("keydown", e => {
+    if (e.key === "Enter") { const first = results.querySelector(".res"); if (first) first.click(); }
+    if (e.key === "Escape") closeResults();
+  });
+  $("clear").addEventListener("click", () => { q.value = ""; wrap.classList.remove("has-text"); q.focus(); showIdle(); });
+  results.addEventListener("click", e => {
+    const b = e.target.closest(".res"); if (!b) return;
+    if (b.dataset.act === "late") return latestNearMe();
+    if (b.dataset.lat) { closeResults(); map.setView([+b.dataset.lat, +b.dataset.lon], 16); return; }
+    const f = lastList[+b.dataset.i]; if (f) focusItem(f);
+  });
+  map.on("click", () => { if (!results.hidden) closeResults(); });
+
+  loadData();
+})();
+</script>
+</body>
+</html>
