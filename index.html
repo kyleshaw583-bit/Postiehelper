@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#B5121B">
+<title>Postie Helper</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📮</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<style>
+  :root {
+    --red: #B5121B;       /* pillar box */
+    --teal: #0F7A73;      /* toilets */
+    --blue: #1F4E8C;      /* post offices */
+    --plum: #6B3FA0;      /* parcel lockers */
+    --ink: #1C1F24;
+    --paper: #FFFFFF;
+    --muted: #5B6470;
+    --line: #E2E5EA;
+    --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --ink: #F2F4F7; --paper: #1A1D22; --muted: #A6AEB9; --line: #2F343C; }
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font); color: var(--ink); background: var(--paper); overflow: hidden; font-size: 16px; }
+  .app { position: relative; height: 100%; display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 0; }
+
+  /* status pill */
+  .status {
+    position: absolute; top: 12px; left: 12px; right: 76px; z-index: 500;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--paper); color: var(--ink);
+    border-radius: 18px; padding: 8px 14px; font-size: 14px; line-height: 1.3; word-break: break-word;
+    box-shadow: 0 2px 10px rgba(0,0,0,.18); width: fit-content; max-width: calc(100% - 88px);
+  }
+  .status .spin { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--red); border-radius: 50%; animation: spin .8s linear infinite; display: none; flex: none; }
+  .status.loading .spin { display: block; }
+  .status.warn { background: #FFF4D6; color: #5A4300; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .locate {
+    position: absolute; top: 12px; right: 12px; z-index: 500;
+    width: 52px; height: 52px; border-radius: 50%; border: 0;
+    background: var(--paper); color: var(--ink); font-size: 22px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.18); cursor: pointer;
+  }
+
+  /* bottom panel */
+  .panel {
+    background: var(--paper); border-top: 1px solid var(--line);
+    padding: 12px 12px 14px; display: grid; gap: 10px;
+    box-shadow: 0 -4px 16px rgba(0,0,0,.08); z-index: 600;
+  }
+  .nearest {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; min-height: 58px; border: 0; border-radius: 14px;
+    background: var(--teal); color: #fff; font: 700 19px/1.2 var(--font); cursor: pointer;
+  }
+  .nearest:active { transform: scale(.98); }
+  .nearest[disabled] { opacity: .6; }
+  .layers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .chip {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 8px 4px; border-radius: 10px; border: 2px solid var(--line);
+    background: transparent; color: var(--ink); font: 400 12.5px/1.15 var(--font); cursor: pointer;
+  }
+  .chip .ico { font-size: 20px; line-height: 1; }
+  .chip .n { font-weight: 700; font-size: 13px; }
+  .chip[aria-pressed="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+  .chip[aria-pressed="false"] { opacity: .5; }
+  button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+
+  /* markers */
+  .pin {
+    width: 34px; height: 34px; border-radius: 50% 50% 50% 4px; transform: rotate(-45deg);
+    display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  }
+  .pin span { transform: rotate(45deg); font-size: 17px; line-height: 1; }
+  .pin.toilet { background: var(--teal); } .pin.postbox { background: var(--red); }
+  .pin.office { background: var(--blue); } .pin.locker { background: var(--plum); }
+  .pin.hl { outline: 4px solid #FFD200; }
+  .cl { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .cl.toilet { background: var(--teal); } .cl.postbox { background: var(--red); }
+  .cl.office { background: var(--blue); } .cl.locker { background: var(--plum); }
+
+  .leaflet-popup-content-wrapper { border-radius: 12px; }
+  .leaflet-popup-content { font-family: var(--font); font-size: 15px; margin: 12px 14px; min-width: 200px; }
+  .pop h3 { margin: 0 0 6px; font-size: 17px; }
+  .pop dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+  .pop dt { color: #5B6470; } .pop dd { margin: 0; }
+  .pop .go { display: block; margin-top: 10px; text-align: center; padding: 10px; border-radius: 10px; background: var(--ink, #1C1F24); color: #fff !important; text-decoration: none; font-weight: 700; }
+  @media (prefers-color-scheme: dark) { .pop .go { background: #1C1F24; } }
+  .you { width: 18px; height: 18px; border-radius: 50%; background: #1A73E8; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(26,115,232,.25); }
+  @media (prefers-reduced-motion: reduce) { .status .spin { animation: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map" aria-label="Map"></div>
+  <div class="status" id="status" role="status"><div class="spin"></div><span id="statusText">Finding you…</span></div>
+  <button class="locate" id="locate" aria-label="Centre on my location">◎</button>
+  <div class="panel">
+    <button class="nearest" id="nearest"><span aria-hidden="true">🚻</span><span id="nearestText">Nearest toilet</span></button>
+    <div class="layers">
+      <button class="chip" data-layer="toilet"  style="--c:var(--teal)"  aria-pressed="true"><span class="ico">🚻</span>Toilets<span class="n" id="n-toilet">0</span></button>
+      <button class="chip" data-layer="postbox" style="--c:var(--red)"   aria-pressed="true"><span class="ico">📮</span>Post boxes<span class="n" id="n-postbox">0</span></button>
+      <button class="chip" data-layer="office"  style="--c:var(--blue)"  aria-pressed="true"><span class="ico">🏤</span>Post Offices<span class="n" id="n-office">0</span></button>
+      <button class="chip" data-layer="locker"  style="--c:var(--plum)"  aria-pressed="true"><span class="ico">📦</span>Lockers<span class="n" id="n-locker">0</span></button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script>
+if (!window.L || !L.markerClusterGroup) {
+  document.getElementById("statusText").textContent = "Map library didn't load. Check your connection and reload";
+  document.getElementById("status").classList.add("warn");
+  throw new Error("Leaflet missing");
+}
+(() => {
+  const MIN_ZOOM = 13;                 // below this, queries get too big
+  const ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter"
+  ];
+  const ICONS = { toilet: "🚻", postbox: "📮", office: "🏤", locker: "📦" };
+  const NAMES = { toilet: "Public toilet", postbox: "Post box", office: "Post Office", locker: "Parcel locker" };
+
+  // ---------- map ----------
+  const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([52.087, -0.264], 14); // Biggleswade
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+
+  const groups = {};
+  const enabled = { toilet: true, postbox: true, office: true, locker: true };
+  for (const k of Object.keys(ICONS)) {
+    groups[k] = L.markerClusterGroup({
+      maxClusterRadius: 45, showCoverageOnHover: false, disableClusteringAtZoom: 17,
+      iconCreateFunction: c => {
+        const n = c.getChildCount(); const s = n < 10 ? 34 : n < 100 ? 40 : 46;
+        return L.divIcon({ html: `<div class="cl ${k}" style="width:${s}px;height:${s}px">${n}</div>`, className: "", iconSize: [s, s] });
+      }
+    }).addTo(map);
+  }
+
+  const features = new Map();   // id -> {kind, lat, lon, tags, marker}
+  const loadedBoxes = [];       // bounds already fetched
+
+  // ---------- helpers ----------
+  const $ = id => document.getElementById(id);
+  const statusEl = $("status"), statusText = $("statusText");
+  function setStatus(text, mode) {
+    statusText.textContent = text;
+    statusEl.classList.toggle("loading", mode === "loading");
+    statusEl.classList.toggle("warn", mode === "warn");
+  }
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  const yesNo = v => v === "yes" ? "Yes" : v === "no" ? "No" : v ? esc(v) : null;
+
+  function kindOf(t) {
+    if (t.amenity === "toilets") return "toilet";
+    if (t.amenity === "post_box") return "postbox";
+    if (t.amenity === "post_office") return "office";
+    if (t.amenity === "parcel_locker") return /royal mail/i.test((t.brand || "") + " " + (t.operator || "") + " " + (t.name || "")) ? "locker" : null;
+    return null;
+  }
+
+  function distM(a, b) {
+    const R = 6371000, toR = x => x * Math.PI / 180;
+    const dLat = toR(b.lat - a.lat), dLon = toR(b.lon - a.lon);
+    const h = Math.sin(dLat/2)**2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  const fmtDist = m => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
+
+  function popupHtml(f) {
+    const t = f.tags, rows = [];
+    const add = (k, v) => { if (v) rows.push(`<dt>${k}</dt><dd>${v}</dd>`); };
+    let title = t.name ? esc(t.name) : NAMES[f.kind];
+    if (f.kind === "toilet") {
+      add("Access", t.access ? esc(t.access) : null);
+      add("Charge", t.fee === "yes" ? (t.charge ? esc(t.charge) : "Yes") : t.fee === "no" ? "Free" : null);
+      add("Open", t.opening_hours ? esc(t.opening_hours) : null);
+      add("Wheelchair", yesNo(t.wheelchair));
+      add("Baby change", yesNo(t.changing_table));
+      add("Radar key", t["centralkey"] === "radar" || t["toilets:wheelchair:key"] ? "Needed" : null);
+    } else if (f.kind === "postbox") {
+      if (t.ref) title = `Post box ${esc(t.ref)}`;
+      add("Collections", t.collection_times ? esc(t.collection_times).replace(/;\s*/g, "<br>") : null);
+      add("Last check", t["check_date:collection_times"] ? esc(t["check_date:collection_times"]) : null);
+      add("Type", t["post_box:type"] ? esc(t["post_box:type"]) : null);
+      add("Cypher", t.royal_cypher ? esc(t.royal_cypher) : null);
+      add("Postcode", t.postal_code || t["addr:postcode"] ? esc(t.postal_code || t["addr:postcode"]) : null);
+    } else {
+      add("Operator", t.operator ? esc(t.operator) : t.brand ? esc(t.brand) : null);
+      add("Open", t.opening_hours ? esc(t.opening_hours).replace(/;\s*/g, "<br>") : null);
+      add("Address", [t["addr:housenumber"], t["addr:street"], t["addr:postcode"]].filter(Boolean).map(esc).join(" ") || null);
+      if (f.kind === "office") add("Collection", t["collection_times"] ? esc(t.collection_times) : null);
+    }
+    if (you) add("Distance", fmtDist(distM(you, f)));
+    if (!rows.length) rows.push(`<dt>Details</dt><dd>None recorded yet</dd>`);
+    const dir = `https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}&travelmode=walking`;
+    return `<div class="pop"><h3>${ICONS[f.kind]} ${title}</h3><dl>${rows.join("")}</dl><a class="go" href="${dir}" target="_blank" rel="noopener">Walking directions</a></div>`;
+  }
+
+  function addFeature(el) {
+    const id = el.type[0] + el.id;
+    if (features.has(id)) return features.get(id);
+    const t = el.tags || {}, kind = kindOf(t);
+    if (!kind) return null;
+    const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+    if (lat == null) return null;
+    const f = { id, kind, lat, lon, tags: t };
+    f.marker = L.marker([lat, lon], {
+      icon: L.divIcon({ html: `<div class="pin ${kind}"><span>${ICONS[kind]}</span></div>`, className: "", iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }),
+      title: NAMES[kind]
+    }).bindPopup(() => popupHtml(f), { maxWidth: 280 });
+    groups[kind].addLayer(f.marker);
+    features.set(id, f);
+    return f;
+  }
+
+  function updateCounts() {
+    const c = { toilet: 0, postbox: 0, office: 0, locker: 0 };
+    const b = map.getBounds();
+    for (const f of features.values()) if (b.contains([f.lat, f.lon])) c[f.kind]++;
+    for (const k in c) $("n-" + k).textContent = c[k];
+  }
+
+  // ---------- Overpass ----------
+  function buildQuery(area) {
+    // area is either "s,w,n,e" or "around:R,lat,lon"
+    return `[out:json][timeout:30];(
+      nwr["amenity"="toilets"](${area});
+      node["amenity"="post_box"](${area});
+      nwr["amenity"="post_office"](${area});
+      nwr["amenity"="parcel_locker"](${area});
+    );out center tags;`;
+  }
+
+  let preferred = 0;   // index of the last server that answered
+  async function overpass(q, onTry) {
+    const fails = [];
+    for (let i = 0; i < ENDPOINTS.length; i++) {
+      const idx = (preferred + i) % ENDPOINTS.length;
+      const host = new URL(ENDPOINTS[idx]).hostname;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 45000);
+      onTry && onTry(i + 1);
+      try {
+        const res = await fetch(ENDPOINTS[idx] + "?data=" + encodeURIComponent(q), { signal: ctrl.signal });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = await res.json();
+        preferred = idx;
+        return json;
+      } catch (e) {
+        fails.push(host + ": " + (e.name === "AbortError" ? "timed out" : e.message));
+      } finally { clearTimeout(timer); }
+    }
+    throw new Error(fails.join(" | "));
+  }
+
+  let busy = false, pending = false, debounceT;
+  async function loadView() {
+    if (map.getZoom() < MIN_ZOOM) { setStatus("Zoom in to load points", "warn"); updateCounts(); return; }
+    const view = map.getBounds();
+    if (loadedBoxes.some(b => b.contains(view))) { setStatus(statusOk()); updateCounts(); return; }
+    if (busy) { pending = true; return; }
+    busy = true;
+    const box = view.pad(0.15);
+    setStatus("Loading this area…", "loading");
+    try {
+      const bbox = [box.getSouth(), box.getWest(), box.getNorth(), box.getEast()].map(n => n.toFixed(5)).join(",");
+      const data = await overpass(buildQuery(bbox), n => setStatus(n === 1 ? "Loading this area…" : `Loading this area… (trying server ${n})`, "loading"));
+      data.elements.forEach(addFeature);
+      loadedBoxes.push(box);
+      setStatus(statusOk());
+    } catch (e) {
+      setStatus(`Couldn't load points. ${e.message}. Retrying in 30s`, "warn");
+      clearTimeout(debounceT); debounceT = setTimeout(loadView, 30000);
+    } finally {
+      busy = false; updateCounts();
+      if (pending) { pending = false; loadView(); }
+    }
+  }
+  const statusOk = () => you ? "Showing points near you" : "Showing points in view";
+
+  map.on("moveend", () => { clearTimeout(debounceT); debounceT = setTimeout(loadView, 350); });
+
+  // ---------- layers ----------
+  document.querySelectorAll(".chip").forEach(btn => btn.addEventListener("click", () => {
+    const k = btn.dataset.layer; enabled[k] = !enabled[k];
+    btn.setAttribute("aria-pressed", enabled[k]);
+    enabled[k] ? map.addLayer(groups[k]) : map.removeLayer(groups[k]);
+  }));
+
+  // ---------- location ----------
+  let you = null, youMarker = null, followOnce = true;
+  function onPos(p) {
+    you = { lat: p.coords.latitude, lon: p.coords.longitude };
+    if (!youMarker) youMarker = L.marker([you.lat, you.lon], { icon: L.divIcon({ html: '<div class="you"></div>', className: "", iconSize: [18, 18] }), zIndexOffset: 1000, interactive: false }).addTo(map);
+    else youMarker.setLatLng([you.lat, you.lon]);
+    if (followOnce) { followOnce = false; map.setView([you.lat, you.lon], 16); }
+  }
+  function onPosErr() {
+    if (!you) { setStatus("Location off. Showing Biggleswade", "warn"); loadView(); }
+  }
+  if ("geolocation" in navigator) {
+    navigator.geolocation.watchPosition(onPos, onPosErr, { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+  } else onPosErr();
+
+  $("locate").addEventListener("click", () => {
+    if (you) map.setView([you.lat, you.lon], Math.max(map.getZoom(), 16));
+    else { followOnce = true; setStatus("Finding you…", "loading"); navigator.geolocation?.getCurrentPosition(onPos, onPosErr, { enableHighAccuracy: true, timeout: 15000 }); }
+  });
+
+  // ---------- nearest toilet ----------
+  let lastHl = null;
+  $("nearest").addEventListener("click", async () => {
+    const btn = $("nearest"), txt = $("nearestText");
+    const origin = you || (() => { const c = map.getCenter(); return { lat: c.lat, lon: c.lng }; })();
+    btn.disabled = true; txt.textContent = "Searching…";
+    try {
+      // make sure we have toilets around the origin, widening if needed
+      let best = null;
+      for (const r of [1000, 3000, 8000]) {
+        const data = await overpass(`[out:json][timeout:30];nwr["amenity"="toilets"](around:${r},${origin.lat},${origin.lon});out center tags;`);
+        data.elements.forEach(addFeature);
+        best = null;
+        for (const f of features.values()) {
+          if (f.kind !== "toilet" || f.tags.access === "private" || f.tags.access === "no") continue;
+          const d = distM(origin, f);
+          if (!best || d < best.d) best = { f, d };
+        }
+        if (best && best.d <= r) break;
+      }
+      if (!best) { txt.textContent = "No toilets within 8 km"; return; }
+      if (!enabled.toilet) document.querySelector('.chip[data-layer="toilet"]').click();
+      lastHl?.classList.remove("hl");
+      groups.toilet.zoomToShowLayer(best.f.marker, () => {
+        best.f.marker.openPopup();
+        lastHl = best.f.marker.getElement()?.querySelector(".pin"); lastHl?.classList.add("hl");
+      });
+      txt.textContent = `Nearest toilet: ${fmtDist(best.d)}`;
+      updateCounts();
+    } catch (e) {
+      txt.textContent = "Search failed. Tap to retry";
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => { if (!btn.disabled) txt.textContent = "Nearest toilet"; }, 8000);
+    }
+  });
+
+  // first load if geolocation is slow
+  setTimeout(() => { if (!you) loadView(); }, 4000);
+})();
+</script>
+</body>
+</html>
