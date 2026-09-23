@@ -129,7 +129,7 @@ def toilet_map():
 OSM_KEEP = ["name", "brand", "ref", "collection_times", "check_date:collection_times", "post_box:type",
             "royal_cypher", "postal_code", "addr:postcode", "addr:street", "addr:housenumber",
             "opening_hours", "operator", "fee", "charge", "wheelchair", "changing_table", "access",
-            "toilets", "toilets:wheelchair", "toilets:access", "toilets:fee", "toilets:changing_table", "changing_table", "v", "assumed"]
+            "toilets", "toilets:wheelchair", "toilets:access", "toilets:fee", "toilets:changing_table", "changing_table", "v", "assumed", "drinking_water", "bottle", "indoor"]
 
 def centroid(geom):
     pts = []
@@ -148,6 +148,7 @@ def osm():
                     "nwr/amenity=post_office,parcel_locker,toilets,fuel,vending_machine",
                     "nwr/toilets=yes,customers", "nwr/highway=services",
                     "nwr/amenity=fast_food,restaurant",
+                    "nwr/amenity=drinking_water", "nwr/drinking_water=yes",
                     "-o", "/tmp/f.osm.pbf", "--overwrite"], check=True)
     subprocess.run(["osmium", "export", "/tmp/f.osm.pbf", "-f", "geojsonseq",
                     "-o", "/tmp/f.geojsonseq", "--overwrite", "--add-unique-id=type_id",
@@ -172,6 +173,19 @@ def osm():
             if not inside(lat, lon):
                 continue
             has_toilets = p.get("toilets") in ("yes", "customers")
+
+            # free water refills: a fountain, or a place that offers tap water
+            if am == "drinking_water" or p.get("drinking_water") == "yes":
+                if p.get("access") in ("private", "no") or p.get("drinking_water") == "no":
+                    pass
+                else:
+                    wt = {x: p[x] for x in OSM_KEEP if p.get(x)}
+                    c = cat_from_tags(p) if am != "drinking_water" else None
+                    if c and c != "place":
+                        wt["cat"] = c
+                    out.append({"k": "w", "s": "osm", "id": "w" + fid, "a": round(lat, 5),
+                                "o": round(lon, 5), "t": wt})
+
             rm = re.search(r"royal\s*mail", " ".join(p.get(x, "") for x in ("brand", "operator", "name")), re.I)
             cat = None
             if am == "post_box":

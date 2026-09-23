@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
 <style>
   :root {
-    --red: #B5121B; --teal: #0F7A73; --blue: #1F4E8C; --plum: #6B3FA0;
+    --red: #B5121B; --teal: #0F7A73; --blue: #1F4E8C; --plum: #6B3FA0; --aqua: #0B6E8A;
     --ink: #1C1F24; --paper: #FFFFFF; --muted: #5B6470; --line: #E2E5EA; --hover: #F2F4F7;
     --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     box-sizing: border-box;
@@ -80,8 +80,8 @@
   .nearest[disabled] { opacity: .6; }
   .hint { margin: 0; text-align: center; font-size: 14.5px; color: var(--muted); }
   .hint[hidden] { display: none; }
-  .layers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-  .chip { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 4px; border-radius: 10px; border: 2px solid var(--line); background: transparent; color: var(--ink); font: 400 12.5px/1.15 var(--font); cursor: pointer; }
+  .layers { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .chip { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 2px; border-radius: 10px; border: 2px solid var(--line); background: transparent; color: var(--ink); font: 400 11.5px/1.15 var(--font); cursor: pointer; }
   .chip .ico { font-size: 20px; line-height: 1; }
   .chip .n { font-weight: 700; font-size: 13px; }
   .chip[aria-pressed="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
@@ -92,12 +92,12 @@
   .pin { width: 34px; height: 34px; border-radius: 50% 50% 50% 4px; transform: rotate(-45deg); display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .pin span { transform: rotate(45deg); font-size: 17px; line-height: 1; }
   .pin.toilet { background: var(--teal); } .pin.postbox { background: var(--red); }
-  .pin.office { background: var(--blue); } .pin.locker { background: var(--plum); }
+  .pin.office { background: var(--blue); } .pin.locker { background: var(--plum); } .pin.water { background: var(--aqua); }
   .pin.hl { outline: 4px solid #FFD200; }
   .pin.guess { opacity: .62; border-style: dashed; }
   .cl { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   .cl.toilet { background: var(--teal); } .cl.postbox { background: var(--red); }
-  .cl.office { background: var(--blue); } .cl.locker { background: var(--plum); }
+  .cl.office { background: var(--blue); } .cl.locker { background: var(--plum); } .cl.water { background: var(--aqua); }
   .area { border-radius: 50%; color: #fff; font: 700 13px/1 var(--font); display: grid; place-items: center; text-align: center; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 1px 5px rgba(0,0,0,.4); cursor: pointer; }
   .area small { display: block; font-weight: 400; font-size: 10px; opacity: .9; margin-top: 2px; }
 
@@ -139,6 +139,7 @@
       <button class="chip" data-layer="postbox" style="--c:var(--red)"  aria-pressed="false"><span class="ico">📮</span>Post boxes<span class="n" id="n-postbox">0</span></button>
       <button class="chip" data-layer="office"  style="--c:var(--blue)" aria-pressed="false"><span class="ico">🏤</span>Post Offices<span class="n" id="n-office">0</span></button>
       <button class="chip" data-layer="locker"  style="--c:var(--plum)" aria-pressed="false"><span class="ico">📦</span>Lockers<span class="n" id="n-locker">0</span></button>
+      <button class="chip" data-layer="water"   style="--c:var(--aqua)" aria-pressed="false"><span class="ico">🚰</span>Water<span class="n" id="n-water">0</span></button>
     </div>
   </div>
 </div>
@@ -158,9 +159,10 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
   const MIN_ZOOM = 13;
   const CELL = 0.02;   // grid cell size in degrees for fast lookups
   const ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
-  const KIND = { t: "toilet", p: "postbox", o: "office", l: "locker" };
-  const ICONS = { toilet: "🚻", postbox: "📮", office: "🏤", locker: "📦" };
-  const NAMES = { toilet: "Toilet", postbox: "Post box", office: "Post Office", locker: "Parcel locker" };
+  const KIND = { t: "toilet", p: "postbox", o: "office", l: "locker", w: "water" };
+  const ICONS = { toilet: "🚻", postbox: "📮", office: "🏤", locker: "📦", water: "🚰" };
+  const NAMES = { toilet: "Toilet", postbox: "Post box", office: "Post Office", locker: "Parcel locker", water: "Water refill" };
+  const zeros = () => Object.fromEntries(Object.values(KIND).map(k => [k, 0]));
   const DAYC = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
   // the type of place a toilet is at: icon and label
   const CATS = {
@@ -270,7 +272,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       for (const f of items) {
         const key = cellX(f.lon, z) + "," + cellY(f.lat, z);
         let c = m.get(key);
-        if (!c) m.set(key, c = { sx: 0, sy: 0, n: { toilet: 0, postbox: 0, office: 0, locker: 0 }, total: 0 });
+        if (!c) m.set(key, c = { sx: 0, sy: 0, n: zeros(), total: 0 });
         c.sx += f.lon; c.sy += f.lat; c.n[f.kind]++; c.total++;
       }
       clusterIdx.set(z, m);
@@ -285,7 +287,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     const b = map.getBounds();
     const x0 = cellX(b.getWest(), zz), x1 = cellX(b.getEast(), zz);
     const y0 = cellY(b.getNorth(), zz), y1 = cellY(b.getSouth(), zz);
-    const counts = { toilet: 0, postbox: 0, office: 0, locker: 0 };
+    const counts = zeros();
     for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
       const c = m.get(x + "," + y);
       if (!c) continue;
@@ -383,6 +385,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     if (f.src === "tm") return f.tags.name || f.tags.at || (c ? CATS[c][1] + " toilet" : "Toilet");
     if (c) return f.tags.name || f.tags.brand || f.tags.at || CATS[c][1];
     if (f.kind === "postbox") return f.tags.ref ? `Post box ${f.tags.ref}` : "Post box";
+    if (f.kind === "water") return f.tags.name || f.tags.operator || (f.tags.amenity === "drinking_water" || !f.tags.drinking_water ? "Drinking fountain" : "Free water refill");
     return f.tags.name || NAMES[f.kind];
   };
   function popupHtml(f) {
@@ -411,6 +414,12 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       add("Open", t.opening_hours ? esc(t.opening_hours) : null);
       add("Wheelchair", yn(t.wheelchair));
       add("Baby change", yn(t.changing_table));
+    } else if (f.kind === "water") {
+      add("Refills", t.drinking_water === "yes" ? "Ask inside, free tap water" : "Public fountain");
+      add("Open", t.opening_hours ? esc(t.opening_hours).replace(/;\s*/g, "<br>") : null);
+      add("Bottle", t.bottle === "yes" ? "Bottle friendly" : null);
+      add("Indoor", yn(t.indoor));
+      add("Operator", t.operator ? esc(t.operator) : null);
     } else if (f.kind === "postbox") {
       const c = collectionsOn(t.collection_times, today());
       add("Today", c === null ? null : c.length ? c.join(", ") : "No collection");
@@ -451,8 +460,8 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       return;
     }
     clusterLayer.clearLayers();
-    const counts = { toilet: 0, postbox: 0, office: 0, locker: 0 };
-    const want = { toilet: new Set(), postbox: new Set(), office: new Set(), locker: new Set() };
+    const counts = zeros();
+    const want = Object.fromEntries(Object.values(KIND).map(k => [k, new Set()]));
     if (map.getZoom() >= MIN_ZOOM) {
       const view = map.getBounds();
       for (const f of itemsIn(view.pad(0.3))) {
@@ -556,6 +565,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     else if (t.amenity === "post_office") kind = "office";
     else if (t.amenity === "parcel_locker" && /royal\s*mail/i.test(`${t.brand || ""} ${t.operator || ""} ${t.name || ""}`)) kind = "locker";
     else if (t.amenity === "toilets" && !toiletsFromFile && t.access !== "private" && t.access !== "no") kind = "toilet";
+    else if (t.amenity === "drinking_water" || t.drinking_water === "yes") kind = "water";
     else if (t.toilets === "yes" || t.toilets === "customers" || t.highway === "services") kind = "toilet";
     if (kind && lat != null) addItem({ id: el.type[0] + el.id, kind, src: "osm", lat, lon, tags: t });
   }
@@ -569,7 +579,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     busy = true;
     const b = view.pad(0.15), bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
     try {
-      const q = `[out:json][timeout:30];(${toiletsFromFile ? "" : `nwr["amenity"="toilets"](${bbox});`}node["amenity"="post_box"](${bbox});nwr["amenity"="post_office"](${bbox});nwr["amenity"="parcel_locker"](${bbox});nwr["toilets"~"^(yes|customers)$"](${bbox});nwr["highway"="services"](${bbox}););out center tags;`;
+      const q = `[out:json][timeout:30];(${toiletsFromFile ? "" : `nwr["amenity"="toilets"](${bbox});`}node["amenity"="post_box"](${bbox});nwr["amenity"="post_office"](${bbox});nwr["amenity"="parcel_locker"](${bbox});nwr["toilets"~"^(yes|customers)$"](${bbox});nwr["highway"="services"](${bbox});nwr["amenity"="drinking_water"](${bbox});nwr["drinking_water"="yes"](${bbox}););out center tags;`;
       const data = await overpass(q, n => setStatus(n === 1 ? "Loading this area…" : `Loading this area… (server ${n})`, "loading"));
       data.elements.forEach(addOsm);
       loadedBoxes.push(b);
@@ -648,6 +658,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
   function showIdle() {
     showList(`<button class="res feature" data-act="late"><span class="i">⏰</span><span><b>Latest collections near me</b><small>Post boxes nearby, latest collection first</small></span></button>
       <button class="res feature" data-act="toilets"><span class="i">🚻</span><span><b>Toilets near me</b><small>Every type, nearest first</small></span></button>
+      <button class="res feature" data-act="water"><span class="i">🚰</span><span><b>Water refills near me</b><small>Fountains and free tap water</small></span></button>
       <button class="res feature" data-act="cp"><span class="i">♿</span><span><b>Changing Places near me</b><small>Adult-sized bench and hoist</small></span></button>
       <button class="res feature" data-act="fuel"><span class="i">⛽</span><span><b>Petrol stations with toilets near me</b><small>Nearest first, open ones marked</small></span></button>
       <div class="empty">Search by post box number (like SG18 12), postcode, town or Post Office name.</div>`, []);
@@ -665,16 +676,16 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       list.map((x, i) => itemButton(x.f, `<span class="late">Last ${x.last}</span>, ${fmtDist(x.d)}`, i)).join(""), list.map(x => x.f));
   }
 
-  function toiletList(title, filter, radius, emptyMsg) {
+  function toiletList(title, filter, radius, emptyMsg, kind = "toilet") {
     const o = origin();
-    const list = itemsIn(L.latLng(o.lat, o.lon).toBounds(radius * 2)).filter(f => f.kind === "toilet" && filter(f))
+    const list = itemsIn(L.latLng(o.lat, o.lon).toBounds(radius * 2)).filter(f => f.kind === kind && filter(f))
       .map(f => ({ f, d: distM(o, f), st: f.src === "tm" ? openState(f.times) : null }))
       .filter(x => x.d <= radius).sort((a, b) => a.d - b.d).slice(0, 20);
     if (!list.length) return showList(`<h4>${title}</h4><div class="empty">${emptyMsg}</div>`, []);
     showList(`<h4>${title}</h4>` + list.map((x, i) => {
       const c = catOf(x.f);
       const bits = [
-        c ? CATS[c][1] : "Public toilet",
+        x.f.kind === "water" ? (x.f.tags.drinking_water === "yes" ? "Ask inside" : "Fountain") : c ? CATS[c][1] : "Public toilet",
         x.st === true ? `<span style="color:#14532D;font-weight:700">Open now</span>` : x.st === false ? `<span class="late">Closed now</span>` : "",
         fmtDist(x.d),
         isCP(x.f) ? "Changing Places" : "",
@@ -685,6 +696,8 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     }).join(""), list.map(x => x.f));
   }
   const toiletsNearMe = () => toiletList("Toilets near me, nearest first", () => true, 5000, "No toilets recorded within 5 km.");
+  const waterNearMe = () => toiletList("Water refills near me, nearest first", () => true, 5000,
+    "None recorded within 5 km. Fountains and refill points are patchily mapped.", "water");
   const cpNearMe = () => toiletList("Changing Places toilets, nearest first", isCP, 25000,
     "None recorded within 25 km. These are rarer than standard accessible toilets.");
   const fuelNearMe = () => toiletList("Petrol stations with toilets, nearest first", isFuel, 15000,
@@ -747,6 +760,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     if (b.dataset.act === "fuel") return fuelNearMe();
     if (b.dataset.act === "toilets") return toiletsNearMe();
     if (b.dataset.act === "cp") return cpNearMe();
+    if (b.dataset.act === "water") return waterNearMe();
     if (b.dataset.lat) { closeResults(); map.setView([+b.dataset.lat, +b.dataset.lon], 16); return; }
     const f = lastList[+b.dataset.i]; if (f) focusItem(f);
   });
