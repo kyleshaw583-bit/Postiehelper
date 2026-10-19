@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#B5121B">
 <title>Postie Helper</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Postie Helper">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📮</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,6 +78,19 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* bottom panel */
+  .sheet { position: absolute; inset: 0; z-index: 900; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; }
+  .sheet[hidden] { display: none; }
+  .sheet-box { width: 100%; max-height: 88%; overflow-y: auto; background: var(--paper); border-radius: 18px 18px 0 0; }
+  .sheet-head { position: sticky; top: 0; background: var(--paper); display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 17px; font-weight: 700; }
+  .sheet-x { border: 0; background: none; color: var(--muted); font-size: 20px; width: 40px; height: 40px; cursor: pointer; }
+  .sheet-body { padding: 14px 16px 20px; }
+  .notice { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: #FFF1D6; color: #7A4B00; font-size: 14px; line-height: 1.5; }
+  .sheet-label { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 700; }
+  .sheet-row { margin: 0 0 10px; font-size: 14.5px; line-height: 1.5; }
+  .sheet-row a { color: var(--blue); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sheet-row a { color: #8FB8EE; } }
+  .sheet-stats { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .sheet-btn { display: block; margin-top: 12px; padding: 12px; border-radius: 12px; border: 2px solid var(--line); text-align: center; text-decoration: none; color: var(--ink); font-size: 14.5px; }
   .panel { background: var(--paper); border-top: 1px solid var(--line); padding: 12px 12px 14px; display: grid; gap: 10px; box-shadow: 0 -4px 16px rgba(0,0,0,.08); z-index: 600; }
   .nearest { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 58px; border: 0; border-radius: 14px; background: var(--teal); color: #fff; font: 700 19px/1.2 var(--font); cursor: pointer; }
   .nearest:active { transform: scale(.98); }
@@ -126,10 +143,34 @@
       <input id="q" type="search" placeholder="Post box number, postcode or town" autocomplete="off" enterkeyhint="search" aria-label="Search" aria-controls="results">
       <button class="clear" id="clear" aria-label="Clear search">✕</button>
     </div>
+    <button class="locate" id="info" aria-label="About this app">ⓘ</button>
     <button class="locate" id="locate" aria-label="Centre on my location">◎</button>
   </div>
   <div class="results" id="results" hidden role="listbox"></div>
   <div class="status" id="status" role="status"><div class="spin"></div><span id="statusText">Starting…</span></div>
+
+  <div class="sheet" id="about" hidden>
+    <div class="sheet-box" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+      <div class="sheet-head">
+        <span id="aboutTitle">About Postie Helper</span>
+        <button class="sheet-x" id="aboutClose" aria-label="Close">✕</button>
+      </div>
+      <div class="sheet-body">
+        <p class="notice">Unofficial app. Not affiliated with, endorsed by, or operated by Royal Mail. Made by a postie, in his own time.</p>
+
+        <p class="sheet-label">Where the data comes from</p>
+        <p class="sheet-row">Toilets from the <a href="https://www.toiletmap.org.uk/" target="_blank" rel="noopener">Great British Public Toilet Map</a>, used under CC BY 4.0.</p>
+        <p class="sheet-row">Post boxes, Post Offices, lockers and water refills from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>. This app's data file is shared under the ODbL.</p>
+        <p class="sheet-row">Some chain toilets are marked “not confirmed”, meaning nobody has recorded them yet. Always worth asking.</p>
+
+        <p class="sheet-label">Your privacy</p>
+        <p class="sheet-row">Your location stays on your phone. Nothing is collected, stored or sent anywhere.</p>
+
+        <div class="sheet-stats"><span id="aboutDate">Data updated —</span><span id="aboutCount">—</span></div>
+        <a class="sheet-btn" href="https://www.toiletmap.org.uk/" target="_blank" rel="noopener">Something missing? Add it on Toilet Map</a>
+      </div>
+    </div>
+  </div>
 
   <div class="panel">
     <button class="nearest" id="nearest"><span aria-hidden="true">🚻</span><span id="nearestText">Nearest open toilet</span></button>
@@ -504,10 +545,14 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
       }
       map.attributionControl.addAttribution('Toilets © <a href="https://www.toiletmap.org.uk/dataset">Toilet Map</a> CC BY 4.0');
       const d = new Date(data.meta.built);
+      $("aboutDate").textContent = "Data updated " + d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      $("aboutCount").textContent = data.points.length.toLocaleString("en-GB") + " places";
       buildClusters();
       setStatus(`Data updated ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`, null, 3000);
     } catch (e) {
       live = true;
+      $("aboutDate").textContent = "Live data";
+      $("aboutCount").textContent = "loaded as you move";
       await loadToiletCsv();
       setStatus("Using live data", null, 2500);
       loadView();
@@ -765,6 +810,20 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
     const f = lastList[+b.dataset.i]; if (f) focusItem(f);
   });
   map.on("click", () => { if (!results.hidden) closeResults(); });
+
+  // ---------- about panel ----------
+  const about = $("about");
+  const openAbout = () => { about.hidden = false; $("aboutClose").focus(); };
+  const closeAbout = () => { about.hidden = true; };
+  $("info").addEventListener("click", openAbout);
+  $("aboutClose").addEventListener("click", closeAbout);
+  about.addEventListener("click", e => { if (e.target === about) closeAbout(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !about.hidden) closeAbout(); });
+
+  // shortcuts from the app icon (long-press on Android)
+  const go = new URLSearchParams(location.search).get("go");
+  if (go === "toilet") setTimeout(() => $("nearest").click(), 1200);
+  if (go === "late") setTimeout(() => { q.focus(); latestNearMe(); }, 1200);
 
   loadData();
 })();
